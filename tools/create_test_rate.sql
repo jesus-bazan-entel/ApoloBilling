@@ -17,7 +17,7 @@ SELECT COUNT(*) as total_rate_cards FROM rate_cards;
 
 \echo ''
 \echo '📋 Rate cards actuales (primeras 5):'
-SELECT id, destination_prefix, rate_per_minute, billing_increment, description
+SELECT id, destination_prefix, destination_name, rate_per_minute, billing_increment
 FROM rate_cards
 ORDER BY destination_prefix
 LIMIT 5;
@@ -28,25 +28,25 @@ LIMIT 5;
 -- Paso 2: Crear tarifa para Perú (51)
 \echo ''
 \echo '📝 Paso 2: Creando tarifa para destino 51 (Perú)...'
+
+-- Eliminar tarifa existente si ya existe
+DELETE FROM rate_cards WHERE destination_prefix = '51';
+
+-- Insertar nueva tarifa
 INSERT INTO rate_cards (
     destination_prefix,
+    destination_name,
     rate_per_minute,
-    billing_increment,
-    description
+    billing_increment
 )
 VALUES
-    ('51', 0.018, 6, 'Peru - Mobile/Fixed')
-ON CONFLICT (destination_prefix)
-DO UPDATE SET
-    rate_per_minute = 0.018,
-    billing_increment = 6,
-    description = 'Peru - Mobile/Fixed'
+    ('51', 'Peru - Mobile/Fixed', 0.018, 6)
 RETURNING
     id,
     destination_prefix,
+    destination_name,
     rate_per_minute,
-    billing_increment,
-    description;
+    billing_increment;
 
 \echo ''
 \echo '─────────────────────────────────────────────────────────────────────────────'
@@ -54,7 +54,7 @@ RETURNING
 -- Paso 3: Verificar todas las rate_cards
 \echo ''
 \echo '📊 Paso 3: Todas las rate cards (después de insertar):'
-SELECT id, destination_prefix, rate_per_minute, billing_increment, description
+SELECT id, destination_prefix, destination_name, rate_per_minute, billing_increment
 FROM rate_cards
 ORDER BY destination_prefix;
 
