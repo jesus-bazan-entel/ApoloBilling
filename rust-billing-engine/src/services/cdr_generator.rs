@@ -99,19 +99,20 @@ impl CdrGenerator {
             (None, None, None)
         };
 
-        // Insert CDR - maneja casos con y sin account_id
+        // Insert CDR - compatible con esquema actual
+        // Usa CAST para convertir UUID string a tipo UUID
         let cdr_id: i64 = client
             .query_one(
                 "INSERT INTO cdrs 
-                 (uuid, account_id, caller, callee, start_time, answer_time, end_time,
-                  duration, billsec, hangup_cause, rate_applied, cost, direction, freeswitch_server_id)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 (call_uuid, account_id, caller_number, called_number, start_time, answer_time, end_time,
+                  duration, billsec, hangup_cause, rate_per_minute, cost)
+                 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                  RETURNING id",
                 &[
-                    &event.uuid,                    // $1
+                    &event.uuid,                    // $1 - cast to UUID
                     &account_id,                    // $2 - puede ser NULL
-                    &event.caller,                  // $3
-                    &event.callee,                  // $4
+                    &event.caller,                  // $3 - caller_number
+                    &event.callee,                  // $4 - called_number
                     &event.start_time,              // $5
                     &event.answer_time,             // $6
                     &event.end_time,                // $7
@@ -120,8 +121,6 @@ impl CdrGenerator {
                     &event.hangup_cause,            // $10
                     &rate_per_minute,               // $11 - puede ser NULL
                     &cost,                          // $12 - puede ser NULL
-                    &event.direction,               // $13
-                    &event.server_id,               // $14
                 ],
             )
             .await
@@ -133,6 +132,7 @@ impl CdrGenerator {
                 error!("   Callee: {}", event.callee);
                 error!("   Duration: {}s", event.duration);
                 error!("   Billsec: {}s", event.billsec);
+                error!("   Error detail: {}", e);
                 BillingError::Database(e)
             })?
             .get(0);
