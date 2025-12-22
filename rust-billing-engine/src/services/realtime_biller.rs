@@ -8,6 +8,8 @@ use tokio::time::{interval, Duration};
 use tracing::{info, warn, error};
 
 const EXTENSION_CHECK_INTERVAL: u64 = 180; // 3 minutes
+const EXTENSION_THRESHOLD_SECONDS: i64 = 240; // Extend if less than 4 minutes remaining
+const EXTENSION_MINUTES: i32 = 3; // Extend by 3 minutes each time
 
 pub struct RealtimeBiller {
     redis: RedisClient,
@@ -38,10 +40,11 @@ impl RealtimeBiller {
 
         let redis = self.redis.clone();
         let call_uuid_clone = call_uuid.clone();
+        let reservation_mgr_clone = self.reservation_mgr.clone();
 
         // Spawn monitoring task
         let handle = tokio::spawn(async move {
-            Self::monitor_call(redis, call_uuid_clone).await;
+            Self::monitor_call(redis, call_uuid_clone, reservation_mgr_clone).await;
         });
 
         // Store handle
@@ -58,7 +61,7 @@ impl RealtimeBiller {
         }
     }
 
-    async fn monitor_call(redis: RedisClient, call_uuid: String) {
+    async fn monitor_call(redis: RedisClient, call_uuid: String, reservation_mgr: Arc<ReservationManager>) {
         let mut check_interval = interval(Duration::from_secs(EXTENSION_CHECK_INTERVAL));
 
         loop {
@@ -80,15 +83,39 @@ impl RealtimeBiller {
                                 
                                 let time_remaining = max_duration - elapsed;
                                 
-                                if time_remaining < (EXTENSION_CHECK_INTERVAL as i64) {
+                                if time_remaining < EXTENSION_THRESHOLD_SECONDS {
                                     warn!(
                                         "⏱️ Call {} approaching max duration. Remaining: {}s",
                                         call_uuid, time_remaining
                                     );
                                     
-                                    // TODO: Request extension from ReservationManager
-                                    // For MVP, just log warning
-                                    // Future: extend_reservation(call_uuid).await
+                                    // ✅ Request extension
+                                    match reservation_mgr.extend_reservation(&call_uuid, EXTENSION_MINUTES).await {
+                                        Ok(result) => {
+                                            if result.success {
+                                                info!(
+                                                    "✅ Reservation extended for call {}: +${}, new max duration: {}s",
+                                                    call_uuid, result.additional_reserved, result.new_max_duration_seconds
+                                                );
+                                                
+                                                // Update session with new max_duration
+                                                let mut updated_session = session.clone();
+                                                updated_session["max_duration"] = serde_json::json!(result.new_max_duration_seconds);
+                                                
+                                                if let Ok(updated_json) = serde_json::to_string(&updated_session) {
+                                                    let _ = redis.set(&session_key, &updated_json, 3600).await;
+                                                }
+                                            } else {
+                                                warn!(
+                                                    "⚠️ Failed to extend reservation for call {}: {}",
+                                                    call_uuid, result.reason
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("❌ Error extending reservation for call {}: {}", call_uuid, e);
+                                        }
+                                    }
                                 }
                             }
                         }

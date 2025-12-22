@@ -26,6 +26,13 @@ pub struct ReservationResult {
     pub max_duration_seconds: i32,
 }
 
+pub struct ExtensionResult {
+    pub success: bool,
+    pub reason: String,
+    pub additional_reserved: f64,
+    pub new_max_duration_seconds: i32,
+}
+
 pub struct ReservationManager {
     db_pool: DbPool,
     redis: RedisClient,
@@ -394,5 +401,159 @@ impl ReservationManager {
         );
 
         Ok(())
+    }
+
+    /// Extend an existing reservation when call is approaching max duration
+    pub async fn extend_reservation(
+        &self,
+        call_uuid: &str,
+        additional_minutes: i32,
+    ) -> Result<ExtensionResult, BillingError> {
+        info!("🔄 Attempting to extend reservation for call: {}", call_uuid);
+
+        // Get existing active reservations
+        let client = self.db_pool.get().await
+            .map_err(|e| BillingError::Internal(e.to_string()))?;
+        
+        let rows = client
+            .query(
+                "SELECT id, account_id, rate_per_minute, reserved_amount, consumed_amount
+                 FROM balance_reservations
+                 WHERE call_uuid = $1 AND status = 'active'
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                &[&call_uuid],
+            )
+            .await?;
+
+        if rows.is_empty() {
+            warn!("❌ No active reservation found for call: {}", call_uuid);
+            return Ok(ExtensionResult {
+                success: false,
+                reason: "no_active_reservation".to_string(),
+                additional_reserved: 0.0,
+                new_max_duration_seconds: 0,
+            });
+        }
+
+        let row = &rows[0];
+        let reservation_id: Uuid = row.get(0);
+        let account_id: i64 = row.get(1);
+        let rate_per_minute: Decimal = row.get(2);
+        let current_reserved: Decimal = row.get(3);
+        let consumed: Decimal = row.get(4);
+
+        // Calculate extension amount
+        let base_amount = rate_per_minute * Decimal::from(additional_minutes);
+        let buffer = base_amount * Decimal::from(RESERVATION_BUFFER_PERCENT) / Decimal::from(100);
+        let mut extension_amount = base_amount + buffer;
+
+        // Apply limits
+        extension_amount = extension_amount.max(Decimal::from_f64(MIN_RESERVATION_AMOUNT).unwrap());
+        extension_amount = extension_amount.min(Decimal::from_f64(MAX_RESERVATION_AMOUNT).unwrap());
+
+        info!(
+            "Extension calculation: base=${}, buffer=${} ({}%), total=${}",
+            base_amount, buffer, RESERVATION_BUFFER_PERCENT, extension_amount
+        );
+
+        // Check available balance
+        let available_balance = self.get_available_balance(account_id).await?;
+
+        if available_balance < extension_amount {
+            warn!(
+                "❌ Insufficient balance for extension: required ${}, available ${}",
+                extension_amount, available_balance
+            );
+            return Ok(ExtensionResult {
+                success: false,
+                reason: "insufficient_balance".to_string(),
+                additional_reserved: 0.0,
+                new_max_duration_seconds: 0,
+            });
+        }
+
+        // Create new extension reservation
+        let extension_id = Uuid::new_v4();
+        let expires_at = Utc::now() + Duration::seconds(RESERVATION_TTL);
+        let expires_at_naive = expires_at.naive_utc();
+
+        // Get destination prefix from original reservation
+        let dest_row = client
+            .query_one(
+                "SELECT destination_prefix FROM balance_reservations WHERE id = $1",
+                &[&reservation_id],
+            )
+            .await?;
+        let destination_prefix: String = dest_row.get(0);
+
+        client
+            .execute(
+                "INSERT INTO balance_reservations 
+                (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
+                status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
+                expires_at, created_by)
+                VALUES ($1, $2, $3, $4, 0, 0, $5, $6, $7, $8, $9, $10, 'system_extension')",
+                &[
+                    &extension_id,
+                    &account_id,
+                    &call_uuid,
+                    &extension_amount,
+                    &"active",
+                    &"extension",
+                    &destination_prefix,
+                    &rate_per_minute,
+                    &additional_minutes,
+                    &expires_at_naive,
+                ],
+            )
+            .await
+            .map_err(|e| {
+                error!("❌ Failed to insert extension reservation: {}", e);
+                BillingError::Database(e)
+            })?;
+
+        // Update Redis cache
+        let cache_data = serde_json::json!({
+            "account_id": account_id,
+            "call_uuid": call_uuid,
+            "reserved_amount": extension_amount.to_f64().unwrap(),
+            "status": "active",
+            "rate_per_minute": rate_per_minute.to_f64().unwrap(),
+            "type": "extension",
+        });
+
+        self.redis
+            .set(
+                &format!("reservation:{}", extension_id),
+                &cache_data.to_string(),
+                RESERVATION_TTL as usize,
+            )
+            .await
+            .map_err(|e| BillingError::Internal(e.to_string()))?;
+
+        // Add to active reservations set
+        self.redis
+            .sadd(&format!("active_reservations:{}", account_id), &extension_id.to_string())
+            .await
+            .map_err(|e| BillingError::Internal(e.to_string()))?;
+
+        // Calculate new max duration
+        let total_reserved = current_reserved + extension_amount - consumed;
+        let new_max_duration_seconds = ((total_reserved / rate_per_minute) * Decimal::from(60))
+            .to_i32()
+            .unwrap_or(0);
+
+        info!(
+            "✅ Reservation extended: {} for call {}. Extension: ${}, New max duration: {}s",
+            extension_id, call_uuid, extension_amount, new_max_duration_seconds
+        );
+
+        Ok(ExtensionResult {
+            success: true,
+            reason: "extended".to_string(),
+            additional_reserved: extension_amount.to_f64().unwrap(),
+            new_max_duration_seconds,
+        })
     }
 }

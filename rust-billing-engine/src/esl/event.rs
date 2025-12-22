@@ -1,5 +1,6 @@
 // src/esl/event.rs
 use std::collections::HashMap;
+use chrono::{DateTime, Utc, NaiveDateTime};
 
 #[derive(Debug, Clone)]
 pub struct EslEvent {
@@ -96,5 +97,39 @@ impl EslEvent {
 
     pub fn hangup_cause(&self) -> Option<&String> {
         self.headers.get("Hangup-Cause")
+    }
+
+    /// Parse FreeSWITCH epoch timestamp (microseconds since epoch) to DateTime<Utc>
+    pub fn timestamp_to_datetime(&self, header_name: &str) -> Option<DateTime<Utc>> {
+        self.headers.get(header_name)
+            .and_then(|s| s.parse::<i64>().ok())
+            .and_then(|micros| {
+                // FreeSWITCH timestamps are in microseconds
+                let secs = micros / 1_000_000;
+                let nsecs = ((micros % 1_000_000) * 1000) as u32;
+                NaiveDateTime::from_timestamp_opt(secs, nsecs)
+                    .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
+            })
+    }
+
+    /// Get call start time (CHANNEL_CREATE epoch)
+    pub fn start_time(&self) -> Option<DateTime<Utc>> {
+        // Try variable_start_epoch first (most accurate)
+        self.timestamp_to_datetime("variable_start_epoch")
+            // Fall back to Event-Date-Timestamp for CHANNEL_CREATE
+            .or_else(|| self.timestamp_to_datetime("Event-Date-Timestamp"))
+    }
+
+    /// Get call answer time
+    pub fn answer_time(&self) -> Option<DateTime<Utc>> {
+        self.timestamp_to_datetime("variable_answer_epoch")
+    }
+
+    /// Get call end time
+    pub fn end_time(&self) -> Option<DateTime<Utc>> {
+        // Try variable_end_epoch first
+        self.timestamp_to_datetime("variable_end_epoch")
+            // Fall back to current event timestamp
+            .or_else(|| self.timestamp_to_datetime("Event-Date-Timestamp"))
     }
 }
