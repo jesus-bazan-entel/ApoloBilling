@@ -27,13 +27,14 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 # Mount static files
 app.mount("/static", StaticFiles(directory="../static"), name="static")
 
-from app.api.routers import accounts, rates, management
+from app.api.routers import accounts, rates, management, rate_cards
 
 # Include API router
 app.include_router(endpoints.router, prefix="/api")
 app.include_router(accounts.router, prefix="/api/accounts", tags=["accounts"])
 app.include_router(rates.router, prefix="/api/rates", tags=["rates"])
 app.include_router(management.router, prefix="/api", tags=["management"])
+app.include_router(rate_cards.router, prefix="/api", tags=["rate_cards"])  # ✅ NEW: Direct rate_cards API
 app.include_router(views.router)
 
 # Templates for frontend
