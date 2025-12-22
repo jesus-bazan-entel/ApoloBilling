@@ -151,11 +151,23 @@ def main():
     
     try:
         with engine.connect() as conn:
-            for command in sql_commands.split(';'):
-                command = command.strip()
-                if command and not command.startswith('--'):
+            # Ejecutar cada comando SQL individualmente
+            commands = [cmd.strip() for cmd in sql_commands.split(';') if cmd.strip()]
+            
+            for command in commands:
+                # Saltar comentarios
+                if command.startswith('--') or not command:
+                    continue
+                
+                try:
                     conn.execute(text(command))
                     conn.commit()
+                except Exception as e:
+                    # Si el error es que la tabla/índice ya existe, continuar
+                    if "already exists" in str(e):
+                        continue
+                    else:
+                        raise
         
         print("✅ Base de datos inicializada correctamente")
         print("")

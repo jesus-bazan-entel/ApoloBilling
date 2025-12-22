@@ -253,8 +253,6 @@ API_V1_STR=/api
 DATABASE_URL=postgresql://apolo_user:apolo_password_2024@localhost/apolo_billing
 SECRET_KEY=desarrollo-secret-key-cambiar-en-produccion-123456789
 SUPERADMIN_PASSWORD=admin123
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=60
 EOF
         log_success "Archivo .env actualizado"
     fi
@@ -265,8 +263,6 @@ API_V1_STR=/api
 DATABASE_URL=postgresql://apolo_user:apolo_password_2024@localhost/apolo_billing
 SECRET_KEY=desarrollo-secret-key-cambiar-en-produccion-123456789
 SUPERADMIN_PASSWORD=admin123
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=60
 EOF
     log_success "Archivo .env creado"
 fi
