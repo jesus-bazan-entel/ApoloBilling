@@ -260,15 +260,15 @@ impl AuthorizationService {
         let row = client
             .query_opt(
                 "SELECT id, destination_prefix, destination_name, rate_per_minute,
-                        billing_increment, connection_fee, 
+                        billing_increment, COALESCE(connection_fee, 0.0) as connection_fee, 
                         effective_start AT TIME ZONE 'UTC', 
                         effective_end AT TIME ZONE 'UTC', 
-                        priority
+                        COALESCE(priority, 10) as priority
                 FROM rate_cards
                 WHERE destination_prefix = ANY($1)
                 AND (effective_start IS NULL OR effective_start <= NOW())
                 AND (effective_end IS NULL OR effective_end >= NOW())
-                ORDER BY LENGTH(destination_prefix) DESC, priority DESC
+                ORDER BY LENGTH(destination_prefix) DESC, COALESCE(priority, 10) DESC
                 LIMIT 1",
                 &[&prefixes],
             )
@@ -277,16 +277,48 @@ impl AuthorizationService {
         match row {
             Some(r) => {
                 let rate = crate::models::RateCard {
-                    id: r.get(0),
-                    destination_prefix: r.get(1),
-                    destination_name: r.get(2),
-                    rate_per_minute: r.get(3),
-                    billing_increment: r.get(4),
-                    connection_fee: r.get(5),
-                    effective_start: r.get(6),
-                    effective_end: r.get(7),
-                    priority: r.get(8),
+                    id: r.try_get(0).map_err(|e| {
+                        error!("❌ Error getting rate.id (column 0): {}", e);
+                        BillingError::Internal(format!("Rate column 0 error: {}", e))
+                    })?,
+                    destination_prefix: r.try_get(1).map_err(|e| {
+                        error!("❌ Error getting destination_prefix (column 1): {}", e);
+                        BillingError::Internal(format!("Rate column 1 error: {}", e))
+                    })?,
+                    destination_name: r.try_get(2).map_err(|e| {
+                        error!("❌ Error getting destination_name (column 2): {}", e);
+                        BillingError::Internal(format!("Rate column 2 error: {}", e))
+                    })?,
+                    rate_per_minute: r.try_get(3).map_err(|e| {
+                        error!("❌ Error getting rate_per_minute (column 3): {}", e);
+                        BillingError::Internal(format!("Rate column 3 error: {}", e))
+                    })?,
+                    billing_increment: r.try_get(4).map_err(|e| {
+                        error!("❌ Error getting billing_increment (column 4): {}", e);
+                        BillingError::Internal(format!("Rate column 4 error: {}", e))
+                    })?,
+                    connection_fee: r.try_get(5).map_err(|e| {
+                        error!("❌ Error getting connection_fee (column 5): {}", e);
+                        BillingError::Internal(format!("Rate column 5 error: {}", e))
+                    })?,
+                    effective_start: r.try_get(6).map_err(|e| {
+                        error!("❌ Error getting effective_start (column 6): {}", e);
+                        BillingError::Internal(format!("Rate column 6 error: {}", e))
+                    })?,
+                    effective_end: r.try_get(7).map_err(|e| {
+                        error!("❌ Error getting effective_end (column 7): {}", e);
+                        BillingError::Internal(format!("Rate column 7 error: {}", e))
+                    })?,
+                    priority: r.try_get(8).map_err(|e| {
+                        error!("❌ Error getting priority (column 8): {}", e);
+                        BillingError::Internal(format!("Rate column 8 error: {}", e))
+                    })?,
                 };
+
+                info!(
+                    "✅ Rate card loaded: {} (${}/min, {} sec increment, priority {})",
+                    rate.destination_name, rate.rate_per_minute, rate.billing_increment, rate.priority
+                );
 
                 // Cache result
                 if let Ok(json) = serde_json::to_string(&rate) {
