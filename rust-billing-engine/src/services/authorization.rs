@@ -151,13 +151,13 @@ impl AuthorizationService {
         
         let row = client
             .query_opt(
-                "SELECT id, account_number, account_type::text, balance, credit_limit, 
-                        currency, status::text, max_concurrent_calls, 
+                "SELECT id, account_number, account_type, balance, 
+                        COALESCE(max_concurrent_calls, 5) as max_concurrent_calls,
+                        status, 
                         created_at AT TIME ZONE 'UTC', updated_at AT TIME ZONE 'UTC'
                 FROM accounts
-                WHERE (account_number = $1 OR account_number = $2
-                    OR customer_phone = $1 OR customer_phone = $2)
-                AND status::text = 'ACTIVE'
+                WHERE account_number = $1 OR account_number = $2
+                AND status = 'ACTIVE'
                 LIMIT 1",
                 &[&ani, &normalized],
             )
@@ -190,34 +190,24 @@ impl AuthorizationService {
                     BillingError::Internal(format!("Column 3 error: {}", e))
                 })?;
                 
-                let credit_limit: Decimal = r.try_get(4).map_err(|e| {
-                    error!("❌ Error getting credit_limit (column 4): {}", e);
+                let max_concurrent_calls: i32 = r.try_get(4).map_err(|e| {
+                    error!("❌ Error getting max_concurrent_calls (column 4): {}", e);
                     BillingError::Internal(format!("Column 4 error: {}", e))
                 })?;
                 
-                let currency: String = r.try_get(5).map_err(|e| {
-                    error!("❌ Error getting currency (column 5): {}", e);
+                let status_str: String = r.try_get(5).map_err(|e| {
+                    error!("❌ Error getting status (column 5): {}", e);
                     BillingError::Internal(format!("Column 5 error: {}", e))
                 })?;
                 
-                let status_str: String = r.try_get(6).map_err(|e| {
-                    error!("❌ Error getting status (column 6): {}", e);
+                let created_at: DateTime<Utc> = r.try_get(6).map_err(|e| {
+                    error!("❌ Error getting created_at (column 6): {}", e);
                     BillingError::Internal(format!("Column 6 error: {}", e))
                 })?;
                 
-                let max_concurrent_calls: i32 = r.try_get(7).map_err(|e| {
-                    error!("❌ Error getting max_concurrent_calls (column 7): {}", e);
+                let updated_at: DateTime<Utc> = r.try_get(7).map_err(|e| {
+                    error!("❌ Error getting updated_at (column 7): {}", e);
                     BillingError::Internal(format!("Column 7 error: {}", e))
-                })?;
-                
-                let created_at: DateTime<Utc> = r.try_get(8).map_err(|e| {
-                    error!("❌ Error getting created_at (column 8): {}", e);
-                    BillingError::Internal(format!("Column 8 error: {}", e))
-                })?;
-                
-                let updated_at: DateTime<Utc> = r.try_get(9).map_err(|e| {
-                    error!("❌ Error getting updated_at (column 9): {}", e);
-                    BillingError::Internal(format!("Column 9 error: {}", e))
                 })?;
 
                 info!(
@@ -230,10 +220,10 @@ impl AuthorizationService {
                     account_number,
                     account_type: AccountType::from_str(&account_type_str),
                     balance,
-                    credit_limit,
-                    currency,
+                    credit_limit: Decimal::ZERO,  // No credit_limit in schema
+                    currency: "USD".to_string(),  // Default currency
                     status: AccountStatus::from_str(&status_str),
-                    max_concurrent_calls: Some(max_concurrent_calls),  // ✅ CORREGIDO
+                    max_concurrent_calls: Some(max_concurrent_calls),
                     created_at,
                     updated_at,
                 }))
