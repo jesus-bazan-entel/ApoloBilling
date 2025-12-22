@@ -21,7 +21,7 @@ use services::{
     RealtimeBiller, 
     CdrGenerator
 };
-use esl::FreeSwitchCluster;
+use esl::{FreeSwitchCluster, EslServer};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -78,15 +78,15 @@ async fn main() -> std::io::Result<()> {
         reservation_mgr.clone()
     ));
 
-    // Start FreeSWITCH ESL cluster
+    // Start FreeSWITCH ESL cluster (client mode - connect to real FreeSWITCH)
     if !config.freeswitch_servers.is_empty() {
         let esl_cluster = FreeSwitchCluster::new(
             config.freeswitch_servers.clone(),
             auth_service.clone(),
             realtime_biller.clone(),
             cdr_generator.clone(),
-            db_pool.clone(),      // ✅ Agregado
-            redis_client.clone(), // ✅ Agregado
+            db_pool.clone(),
+            redis_client.clone(),
         );
 
         tokio::spawn(async move {
@@ -95,9 +95,26 @@ async fn main() -> std::io::Result<()> {
             }
         });
 
-        info!("✅ FreeSWITCH ESL cluster started");
+        info!("✅ FreeSWITCH ESL cluster started (client mode)");
     } else {
-        info!("⚠️  No FreeSWITCH servers configured");
+        info!("⚠️  No FreeSWITCH servers configured - starting ESL server for testing");
+        
+        // Start ESL Server (server mode - accept connections from simulator)
+        let esl_server = EslServer::new(
+            auth_service.clone(),
+            realtime_biller.clone(),
+            cdr_generator.clone(),
+            db_pool.clone(),
+            redis_client.clone(),
+        );
+
+        tokio::spawn(async move {
+            if let Err(e) = esl_server.start("0.0.0.0:8021").await {
+                error!("ESL Server error: {}", e);
+            }
+        });
+
+        info!("✅ ESL Server started on 0.0.0.0:8021 (server mode for testing)");
     }
 
     // HTTP Server

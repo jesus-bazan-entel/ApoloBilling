@@ -15,7 +15,7 @@ pub struct EventHandler {
     cdr_generator: Arc<CdrGenerator>,
     db_pool: DbPool,
     redis: RedisClient,
-    connection: Arc<EslConnection>,  // ✅ Agregado
+    connection: Option<Arc<EslConnection>>,  // Optional for server mode
 }
 
 impl EventHandler {
@@ -26,7 +26,7 @@ impl EventHandler {
         cdr_generator: Arc<CdrGenerator>,
         db_pool: DbPool,
         redis: RedisClient,
-        connection: Arc<EslConnection>,  // ✅ Agregado
+        connection: Arc<EslConnection>,
     ) -> Self {
         Self {
             server_id,
@@ -35,11 +35,29 @@ impl EventHandler {
             cdr_generator,
             db_pool,
             redis,
-            connection,  // ✅ Agregado
+            connection: Some(connection),
         }
     }
 
-    pub async fn handle_event(&self, event: &EslEvent) {
+    pub fn new_server_mode(
+        auth_service: Arc<AuthorizationService>,
+        realtime_biller: Arc<RealtimeBiller>,
+        cdr_generator: Arc<CdrGenerator>,
+        db_pool: DbPool,
+        redis: RedisClient,
+    ) -> Self {
+        Self {
+            server_id: "esl-server".to_string(),
+            auth_service,
+            realtime_biller,
+            cdr_generator,
+            db_pool,
+            redis,
+            connection: None,  // No connection in server mode
+        }
+    }
+
+    pub async fn handle_event(&self, event: &EslEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(event_name) = event.event_name() {
             match event_name.as_str() {
                 "CHANNEL_CREATE" => self.handle_channel_create(event).await,
@@ -48,6 +66,7 @@ impl EventHandler {
                 _ => {}
             }
         }
+        Ok(())
     }
 
     async fn handle_channel_create(&self, event: &EslEvent) {
@@ -73,15 +92,19 @@ impl EventHandler {
                 if !response.authorized {
                     warn!("❌ Call DENIED: {} - Reason: {}", uuid, response.reason);
                     
-                    // ✅ Send uuid_kill command to FreeSWITCH
-                    let kill_command = format!("api uuid_kill {} CALL_REJECTED\n\n", uuid);
-                    match self.connection.send_command(&kill_command).await {
-                        Ok(result) => {
-                            info!("🔪 Sent kill command for call {}: {}", uuid, result.trim());
+                    // Send uuid_kill command to FreeSWITCH (if connection available)
+                    if let Some(conn) = &self.connection {
+                        let kill_command = format!("api uuid_kill {} CALL_REJECTED\n\n", uuid);
+                        match conn.send_command(&kill_command).await {
+                            Ok(result) => {
+                                info!("🔪 Sent kill command for call {}: {}", uuid, result.trim());
+                            }
+                            Err(e) => {
+                                error!("❌ Failed to send kill command for call {}: {}", uuid, e);
+                            }
                         }
-                        Err(e) => {
-                            error!("❌ Failed to send kill command for call {}: {}", uuid, e);
-                        }
+                    } else {
+                        info!("📝 Call denied but no connection to send kill command (server mode)");
                     }
 
                 } else {
