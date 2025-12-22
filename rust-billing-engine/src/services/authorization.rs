@@ -261,8 +261,8 @@ impl AuthorizationService {
             .query_opt(
                 "SELECT id, destination_prefix, destination_name, rate_per_minute,
                         billing_increment, COALESCE(connection_fee, 0.0) as connection_fee, 
-                        effective_start AT TIME ZONE 'UTC', 
-                        effective_end AT TIME ZONE 'UTC', 
+                        COALESCE(effective_start, NOW())::timestamptz as effective_start, 
+                        effective_end::timestamptz as effective_end, 
                         COALESCE(priority, 10) as priority
                 FROM rate_cards
                 WHERE destination_prefix = ANY($1)
