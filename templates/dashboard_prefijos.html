@@ -21,7 +21,7 @@
                 <select class="form-select" id="filterZona" onchange="filterByZona()">
                     <option value="">Todas las Zonas</option>
                     {% for zona in zonas %}
-                    <option value="{{ zona[0] }}" {% if zona_actual and zona[0] == zona_actual[0] %}selected{% endif %}>
+                    <option value="{{ zona[0] }}" {% if zona_actual and zona[0]==zona_actual[0] %}selected{% endif %}>
                         {{ zona[1] }}
                     </option>
                     {% endfor %}
@@ -55,12 +55,12 @@
                         <td>{{ prefijo[4] }}</td>
                         <td>
                             <div class="btn-group" role="group">
-                                <button type="button" class="btn btn-sm btn-outline-primary" 
-                                        onclick="editPrefijo({{ prefijo[0] }}, {{ prefijo[1] }}, '{{ prefijo[2] }}', {{ prefijo[3] }}, {{ prefijo[4] }})">
+                                <button type="button" class="btn btn-sm btn-outline-primary"
+                                    onclick="editPrefijo('{{ prefijo[0] }}', '{{ prefijo[1] }}', '{{ prefijo[2] }}', '{{ prefijo[3] }}', '{{ prefijo[4] }}')">
                                     <i class="bi bi-pencil"></i>
                                 </button>
-                                <button type="button" class="btn btn-sm btn-outline-danger" 
-                                        onclick="confirmDeletePrefijo({{ prefijo[0] }}, '{{ prefijo[2] }}')">
+                                <button type="button" class="btn btn-sm btn-outline-danger"
+                                    onclick="confirmDeletePrefijo({{ prefijo[0] }}, '{{ prefijo[2] }}')">
                                     <i class="bi bi-trash"></i>
                                 </button>
                             </div>
@@ -87,7 +87,8 @@
                         <label for="createZonaId" class="form-label">Zona</label>
                         <select class="form-select" id="createZonaId" required>
                             {% for zona in zonas %}
-                            <option value="{{ zona[0] }}" {% if zona_actual and zona[0] == zona_actual[0] %}selected{% endif %}>
+                            <option value="{{ zona[0] }}" {% if zona_actual and zona[0]==zona_actual[0] %}selected{%
+                                endif %}>
                                 {{ zona[1] }}
                             </option>
                             {% endfor %}
@@ -167,7 +168,8 @@
             </div>
             <div class="modal-body">
                 <p>¿Está seguro que desea eliminar el prefijo <strong id="deletePrefijoNombre"></strong>?</p>
-                <p class="text-danger">Esta acción no se puede deshacer y podría afectar la tarificación de llamadas.</p>
+                <p class="text-danger">Esta acción no se puede deshacer y podría afectar la tarificación de llamadas.
+                </p>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
@@ -192,19 +194,20 @@
         }
     }
 
+
     // Función para crear un nuevo prefijo
     function createPrefijo() {
-        const zonaId = parseInt(document.getElementById('createZonaId').value);
+        const zonaId = document.getElementById('createZonaId').value;
         const prefijo = document.getElementById('createPrefijo').value;
-        const longitudMinima = parseInt(document.getElementById('createLongitudMinima').value);
-        const longitudMaxima = parseInt(document.getElementById('createLongitudMaxima').value);
+        const longitudMinima = document.getElementById('createLongitudMinima').value;
+        const longitudMaxima = document.getElementById('createLongitudMaxima').value;
 
         if (!prefijo) {
             alert('El prefijo es obligatorio');
             return;
         }
 
-        if (longitudMinima > longitudMaxima) {
+        if (parseInt(longitudMinima) > parseInt(longitudMaxima)) {
             alert('La longitud mínima no puede ser mayor que la longitud máxima');
             return;
         }
@@ -215,25 +218,25 @@
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                zona_id: zonaId,
+                zona_id: parseInt(zonaId),
                 prefijo: prefijo,
-                longitud_minima: longitudMinima,
-                longitud_maxima: longitudMaxima
+                longitud_minima: parseInt(longitudMinima),
+                longitud_maxima: parseInt(longitudMaxima)
             }),
         })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Error al crear el prefijo');
-            }
-            return response.json();
-        })
-        .then(data => {
-            bootstrap.Modal.getInstance(document.getElementById('createPrefijoModal')).hide();
-            window.location.reload();
-        })
-        .catch(error => {
-            alert('Error: ' + error.message);
-        });
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => { throw err; });
+                }
+                return response.json();
+            })
+            .then(data => {
+                bootstrap.Modal.getInstance(document.getElementById('createPrefijoModal')).hide();
+                window.location.reload();
+            })
+            .catch(error => {
+                alert('Error: ' + (error.detail || error.message || 'Error desconocido'));
+            });
     }
 
     // Función para abrir el modal de edición
@@ -248,49 +251,48 @@
         modal.show();
     }
 
+
     // Función para actualizar un prefijo
     function updatePrefijo() {
         const id = document.getElementById('editPrefijoId').value;
-        const zonaId = parseInt(document.getElementById('editZonaId').value);
+        const zonaId = document.getElementById('editZonaId').value;
         const prefijo = document.getElementById('editPrefijo').value;
-        const longitudMinima = parseInt(document.getElementById('editLongitudMinima').value);
-        const longitudMaxima = parseInt(document.getElementById('editLongitudMaxima').value);
+        const longitudMinima = document.getElementById('editLongitudMinima').value;
+        const longitudMaxima = document.getElementById('editLongitudMaxima').value;
 
         if (!prefijo) {
             alert('El prefijo es obligatorio');
             return;
         }
 
-        if (longitudMinima > longitudMaxima) {
+        if (parseInt(longitudMinima) > parseInt(longitudMaxima)) {
             alert('La longitud mínima no puede ser mayor que la longitud máxima');
             return;
         }
 
+        const formData = new FormData();
+        formData.append('zona_id', zonaId);
+        formData.append('prefijo', prefijo);
+        formData.append('longitud_minima', longitudMinima);
+        formData.append('longitud_maxima', longitudMaxima);
+
         fetch(`/api/prefijos/${id}`, {
             method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                zona_id: zonaId,
-                prefijo: prefijo,
-                longitud_minima: longitudMinima,
-                longitud_maxima: longitudMaxima
-            }),
+            body: formData
         })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Error al actualizar el prefijo');
-            }
-            return response.json();
-        })
-        .then(data => {
-            bootstrap.Modal.getInstance(document.getElementById('editPrefijoModal')).hide();
-            window.location.reload();
-        })
-        .catch(error => {
-            alert('Error: ' + error.message);
-        });
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => { throw err; });
+                }
+                return response.json();
+            })
+            .then(data => {
+                bootstrap.Modal.getInstance(document.getElementById('editPrefijoModal')).hide();
+                window.location.reload();
+            })
+            .catch(error => {
+                alert('Error: ' + (error.detail || error.message || 'Error desconocido'));
+            });
     }
 
     // Función para confirmar eliminación
@@ -309,20 +311,20 @@
         fetch(`/api/prefijos/${prefijoIdToDelete}`, {
             method: 'DELETE',
         })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Error al eliminar el prefijo');
-            }
-            return response.json();
-        })
-        .then(data => {
-            bootstrap.Modal.getInstance(document.getElementById('deletePrefijoModal')).hide();
-            window.location.reload();
-        })
-        .catch(error => {
-            alert('Error: ' + error.message);
-            bootstrap.Modal.getInstance(document.getElementById('deletePrefijoModal')).hide();
-        });
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Error al eliminar el prefijo');
+                }
+                return response.json();
+            })
+            .then(data => {
+                bootstrap.Modal.getInstance(document.getElementById('deletePrefijoModal')).hide();
+                window.location.reload();
+            })
+            .catch(error => {
+                alert('Error: ' + error.message);
+                bootstrap.Modal.getInstance(document.getElementById('deletePrefijoModal')).hide();
+            });
     }
 </script>
 {% endblock %}

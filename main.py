@@ -36,7 +36,7 @@ def lt_filter(value, threshold):
 def ternary_filter(value, true_val, false_val):
     return true_val if value else false_val
 
-DATABASE_URL = "postgresql://tarificador_user:fr4v4t3l@localhost/tarificador"
+DATABASE_URL = "postgresql://apolo:apolo123@localhost/apolobilling"
 SECRET = "secreto-super-importante"
 
 engine = create_engine(DATABASE_URL)
@@ -586,140 +586,219 @@ class Usuario(Base):
     ultimo_login = Column(DateTime, nullable=True)
 
 # Nuevos modelos para gestión de zonas y tarifas
+# Adaptación: zonas -> zones
 class Zona(Base):
-    __tablename__ = "zonas"
+    __tablename__ = "zones"
     id = Column(Integer, primary_key=True, index=True)
-    nombre = Column(String, unique=True)
-    descripcion = Column(String)
+    nombre = Column("zone_name", String, unique=True)
+    descripcion = Column("description", String)
     prefijos = relationship("Prefijo", back_populates="zona")
     tarifas = relationship("Tarifa", back_populates="zona")
 
+# Adaptación: prefijos -> prefixes
 class Prefijo(Base):
-    __tablename__ = "prefijos"
+    __tablename__ = "prefixes"
     id = Column(Integer, primary_key=True, index=True)
-    zona_id = Column(Integer, ForeignKey("zonas.id"))
-    prefijo = Column(String)
-    longitud_minima = Column(Integer)
-    longitud_maxima = Column(Integer)
+    zona_id = Column("zone_id", Integer, ForeignKey("zones.id"))
+    prefijo = Column("prefix", String)
+    longitud_minima = Column("prefix_length", Integer)
     zona = relationship("Zona", back_populates="prefijos")
+    
+    @property
+    def longitud_maxima(self):
+        """Alias for longitud_minima since prefixes table only has one length column"""
+        return self.longitud_minima
 
+# Adaptación: tarifas -> rate_zones
 class Tarifa(Base):
-    __tablename__ = "tarifas"
+    __tablename__ = "rate_zones"
     id = Column(Integer, primary_key=True, index=True)
-    zona_id = Column(Integer, ForeignKey("zonas.id"))
-    tarifa_segundo = Column(Numeric(10, 5))  # 5 decimales de precisión
-    fecha_inicio = Column(DateTime, default=datetime.utcnow)
-    activa = Column(Boolean, default=True)
+    zona_id = Column("zone_id", Integer, ForeignKey("zones.id"))
+    # Mapeo especial para tarifa
+    _rate_per_minute = Column("rate_per_minute", Numeric(10, 5))
+    
+    fecha_inicio = Column("effective_from", DateTime, default=datetime.utcnow)
+    activa = Column("enabled", Boolean, default=True)
     zona = relationship("Zona", back_populates="tarifas")
+    
+    @property
+    def tarifa_segundo(self):
+        # Convertir min -> seg
+        return self._rate_per_minute / 60 if self._rate_per_minute is not None else 0
+        
+    @tarifa_segundo.setter
+    def tarifa_segundo(self, value):
+        self._rate_per_minute = value * 60
+
+# Modelo para compatibilidad con motor de billing Rust
+class RateCard(Base):
+    __tablename__ = "rate_cards"
+    id = Column(Integer, primary_key=True, index=True)
+    destination_prefix = Column(String, index=True)
+    destination_name = Column(String)
+    rate_per_minute = Column(Numeric(10, 5))
+    billing_increment = Column(Integer, default=1)
+    connection_fee = Column(Numeric(10, 5), default=0)
+    effective_start = Column(DateTime, default=datetime.utcnow)
+    effective_end = Column(DateTime, nullable=True)
+    priority = Column(Integer, default=1)
 
 Base.metadata.create_all(bind=engine)
+
+# Función para sincronizar prefijos con rate_cards (para el motor Rust)
+def sync_rate_cards(db):
+    """
+    Sincroniza la tabla rate_cards basada en las tablas prefixes, zones y rate_zones.
+    Esto permite que el motor Rust (que lee rate_cards) funcione con la configuración del dashboard.
+    """
+    try:
+        # 1. Limpiar rate cards existentes para regenerar
+        # Nota: En producción esto podría ser bloqueante. Mejor diff sync.
+        # Pero para este fix rápido, truncate es seguro si la carga es baja.
+        db.execute(text("TRUNCATE TABLE rate_cards RESTART IDENTITY"))
+        
+        # 2. Insertar datos combinados
+        query = text("""
+            INSERT INTO rate_cards (
+                destination_prefix, destination_name, rate_per_minute,
+                billing_increment, connection_fee, effective_start, priority, created_at
+            )
+            SELECT 
+                p.prefix, 
+                z.zone_name, 
+                t.rate_per_minute,
+                t.billing_increment, 
+                0, 
+                t.effective_from,
+                t.priority,
+                CURRENT_TIMESTAMP
+            FROM prefixes p
+            JOIN zones z ON p.zone_id = z.id
+            JOIN rate_zones t ON z.id = t.zone_id
+            WHERE t.enabled = TRUE AND p.enabled = TRUE
+        """)
+        db.execute(query)
+        db.commit()
+        print("✅ rate_cards sincronizado correctamente para el motor Rust (Apolobilling DB)")
+    except Exception as e:
+        print(f"❌ Error sincronizando rate_cards: {str(e)}")
+        db.rollback()
 
 # Función para inicializar zonas y prefijos
 def inicializar_zonas_y_prefijos():
     db = SessionLocal()
     
     # Verificar si ya existen zonas
-    check_query = text("SELECT COUNT(*) FROM zonas")
-    count = db.execute(check_query).scalar()
-    
-    if count > 0:
+    try:
+        check_query = text("SELECT COUNT(*) FROM zones")
+        count = db.execute(check_query).scalar()
+        
+        if count > 0:
+            db.close()
+            return
+            
+        print("La tabla zones está vacía. Inicializando datos por defecto...")
+        
+        # Crear zonas iniciales (Adaptado para apolobilling)
+        zonas = [
+            {"nombre": "Local", "descripcion": "Llamadas locales de 7 dígitos", "tarifa": 0.00015},
+            {"nombre": "Movil", "descripcion": "Llamadas a celulares", "tarifa": 0.00030},
+            {"nombre": "LDN", "descripcion": "Larga Distancia Nacional", "tarifa": 0.00050},
+            {"nombre": "LDI", "descripcion": "Larga Distancia Internacional", "tarifa": 0.00120},
+            {"nombre": "Emergencia", "descripcion": "Números de emergencia", "tarifa": 0.00000},
+            {"nombre": "0800", "descripcion": "Números gratuitos", "tarifa": 0.00000}
+        ]
+        
+        zonas_ids = {}
+        
+        for zona_data in zonas:
+            # Insertar zona
+            # zones: zone_name, description, country_id, zone_code, zone_type, region_name, enabled
+            insert_zona_query = text("""
+                INSERT INTO zones (zone_name, description, country_id, zone_code, zone_type, region_name, enabled, created_at, updated_at) 
+                VALUES (:nombre, :descripcion, 4, :code, 'GEOGRAPHIC', 'Default', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                RETURNING id
+            """)
+            
+            code = zona_data["nombre"].upper().replace(" ", "-")[:20]
+            
+            result = db.execute(insert_zona_query, {
+                "nombre": zona_data["nombre"],
+                "descripcion": zona_data["descripcion"],
+                "code": code
+            })
+            
+            zona_id = result.fetchone()[0]
+            zonas_ids[zona_data["nombre"]] = zona_id
+            
+            # Insertar tarifa para la zona en rate_zones
+            # rate_per_minute = tarifa * 60
+            insert_tarifa_query = text("""
+                INSERT INTO rate_zones (
+                    zone_id, rate_name, rate_per_minute, rate_per_call, billing_increment, 
+                    min_duration, effective_from, currency, priority, enabled, created_at, updated_at
+                )
+                VALUES (
+                    :zona_id, 'Default Rate', :rate_per_minute, 0, 60, 
+                    0, CURRENT_TIMESTAMP, 'USD', 1, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+            """)
+            
+            db.execute(insert_tarifa_query, {
+                "zona_id": zona_id,
+                "rate_per_minute": zona_data["tarifa"] * 60
+            })
+        
+        # Insertar prefijos
+        prefijos = [
+            # Local - números fijos 7 dígitos (2-9)XXXXXX
+            {"zona_id": zonas_ids["Local"], "prefijo": "2", "longitud_minima": 7},
+            {"zona_id": zonas_ids["Local"], "prefijo": "3", "longitud_minima": 7},
+            {"zona_id": zonas_ids["Local"], "prefijo": "4", "longitud_minima": 7},
+            {"zona_id": zonas_ids["Local"], "prefijo": "5", "longitud_minima": 7},
+            {"zona_id": zonas_ids["Local"], "prefijo": "6", "longitud_minima": 7},
+            {"zona_id": zonas_ids["Local"], "prefijo": "7", "longitud_minima": 7},
+            {"zona_id": zonas_ids["Local"], "prefijo": "8", "longitud_minima": 7},
+            {"zona_id": zonas_ids["Local"], "prefijo": "9", "longitud_minima": 7},
+            
+            # Móvil - 9 dígitos 9XXXXXXXX
+            {"zona_id": zonas_ids["Movil"], "prefijo": "9", "longitud_minima": 9},
+            
+            # LDN - 0[4-8]XXXXXXX
+            {"zona_id": zonas_ids["LDN"], "prefijo": "04", "longitud_minima": 9},
+            {"zona_id": zonas_ids["LDN"], "prefijo": "05", "longitud_minima": 9},
+            {"zona_id": zonas_ids["LDN"], "prefijo": "06", "longitud_minima": 9},
+            {"zona_id": zonas_ids["LDN"], "prefijo": "07", "longitud_minima": 9},
+            {"zona_id": zonas_ids["LDN"], "prefijo": "08", "longitud_minima": 9},
+            
+            # LDI - 00[1-9]XXXXXXX.... (10-15 dígitos)
+            {"zona_id": zonas_ids["LDI"], "prefijo": "001", "longitud_minima": 10},
+            
+            # Emergencia 1XX
+            {"zona_id": zonas_ids["Emergencia"], "prefijo": "1", "longitud_minima": 3},
+            
+            # 0800 - 0800XXXXX
+            {"zona_id": zonas_ids["0800"], "prefijo": "0800", "longitud_minima": 9},
+        ]
+        
+        for prefijo_data in prefijos:
+            insert_prefijo_query = text("""
+                INSERT INTO prefixes (zone_id, prefix, prefix_length, operator_name, network_type, enabled, created_at, updated_at)
+                VALUES (:zona_id, :prefijo, :longitud_minima, 'Default', 'UNKNOWN', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """)
+            
+            db.execute(insert_prefijo_query, {
+                "zona_id": prefijo_data["zona_id"],
+                "prefijo": prefijo_data["prefijo"],
+                "longitud_minima": prefijo_data["longitud_minima"]
+            })
+        
+        db.commit()
+    except Exception as e:
+        print(f"Error inicializando zonas: {e}")
+        db.rollback()
+    finally:
         db.close()
-        return
-    
-    # Crear zonas iniciales
-    zonas = [
-        {"nombre": "Local", "descripcion": "Llamadas locales de 7 dígitos", "tarifa": 0.00015},
-        {"nombre": "Movil", "descripcion": "Llamadas a celulares", "tarifa": 0.00030},
-        {"nombre": "LDN", "descripcion": "Larga Distancia Nacional", "tarifa": 0.00050},
-        {"nombre": "LDI", "descripcion": "Larga Distancia Internacional", "tarifa": 0.00120},
-        {"nombre": "Emergencia", "descripcion": "Números de emergencia", "tarifa": 0.00000},
-        {"nombre": "0800", "descripcion": "Números gratuitos", "tarifa": 0.00000}
-    ]
-    
-    zonas_ids = {}
-    
-    for zona_data in zonas:
-        # Insertar zona
-        insert_zona_query = text("""
-            INSERT INTO zonas (nombre, descripcion) 
-            VALUES (:nombre, :descripcion)
-            RETURNING id
-        """)
-        
-        result = db.execute(insert_zona_query, {
-            "nombre": zona_data["nombre"],
-            "descripcion": zona_data["descripcion"]
-        })
-        
-        zona_id = result.fetchone()[0]
-        zonas_ids[zona_data["nombre"]] = zona_id
-        
-        # Insertar tarifa para la zona
-        insert_tarifa_query = text("""
-            INSERT INTO tarifas (zona_id, tarifa_segundo, fecha_inicio, activa)
-            VALUES (:zona_id, :tarifa_segundo, CURRENT_TIMESTAMP, TRUE)
-        """)
-        
-        db.execute(insert_tarifa_query, {
-            "zona_id": zona_id,
-            "tarifa_segundo": zona_data["tarifa"]
-        })
-    
-    # Insertar prefijos
-    prefijos = [
-        # Local - números fijos 7 dígitos (2-9)XXXXXX
-        {"zona_id": zonas_ids["Local"], "prefijo": "2", "longitud_minima": 7, "longitud_maxima": 7},
-        {"zona_id": zonas_ids["Local"], "prefijo": "3", "longitud_minima": 7, "longitud_maxima": 7},
-        {"zona_id": zonas_ids["Local"], "prefijo": "4", "longitud_minima": 7, "longitud_maxima": 7},
-        {"zona_id": zonas_ids["Local"], "prefijo": "5", "longitud_minima": 7, "longitud_maxima": 7},
-        {"zona_id": zonas_ids["Local"], "prefijo": "6", "longitud_minima": 7, "longitud_maxima": 7},
-        {"zona_id": zonas_ids["Local"], "prefijo": "7", "longitud_minima": 7, "longitud_maxima": 7},
-        {"zona_id": zonas_ids["Local"], "prefijo": "8", "longitud_minima": 7, "longitud_maxima": 7},
-        {"zona_id": zonas_ids["Local"], "prefijo": "9", "longitud_minima": 7, "longitud_maxima": 7},
-        
-        # Móvil - 9 dígitos 9XXXXXXXX
-        {"zona_id": zonas_ids["Movil"], "prefijo": "9", "longitud_minima": 9, "longitud_maxima": 9},
-        
-        # LDN - 0[4-8]XXXXXXX
-        {"zona_id": zonas_ids["LDN"], "prefijo": "04", "longitud_minima": 9, "longitud_maxima": 10},
-        {"zona_id": zonas_ids["LDN"], "prefijo": "05", "longitud_minima": 9, "longitud_maxima": 10},
-        {"zona_id": zonas_ids["LDN"], "prefijo": "06", "longitud_minima": 9, "longitud_maxima": 10},
-        {"zona_id": zonas_ids["LDN"], "prefijo": "07", "longitud_minima": 9, "longitud_maxima": 10},
-        {"zona_id": zonas_ids["LDN"], "prefijo": "08", "longitud_minima": 9, "longitud_maxima": 10},
-        
-        # LDI - 00[1-9]XXXXXXX.... (10-15 dígitos)
-        {"zona_id": zonas_ids["LDI"], "prefijo": "001", "longitud_minima": 10, "longitud_maxima": 15},
-        {"zona_id": zonas_ids["LDI"], "prefijo": "002", "longitud_minima": 10, "longitud_maxima": 15},
-        {"zona_id": zonas_ids["LDI"], "prefijo": "003", "longitud_minima": 10, "longitud_maxima": 15},
-        {"zona_id": zonas_ids["LDI"], "prefijo": "004", "longitud_minima": 10, "longitud_maxima": 15},
-        {"zona_id": zonas_ids["LDI"], "prefijo": "005", "longitud_minima": 10, "longitud_maxima": 15},
-        {"zona_id": zonas_ids["LDI"], "prefijo": "006", "longitud_minima": 10, "longitud_maxima": 15},
-        {"zona_id": zonas_ids["LDI"], "prefijo": "007", "longitud_minima": 10, "longitud_maxima": 15},
-        {"zona_id": zonas_ids["LDI"], "prefijo": "008", "longitud_minima": 10, "longitud_maxima": 15},
-        {"zona_id": zonas_ids["LDI"], "prefijo": "009", "longitud_minima": 10, "longitud_maxima": 15},
-        
-        # Emergencia 1XX
-        {"zona_id": zonas_ids["Emergencia"], "prefijo": "1", "longitud_minima": 3, "longitud_maxima": 3},
-        
-        # 0800 - 0800XXXXX
-        {"zona_id": zonas_ids["0800"], "prefijo": "0800", "longitud_minima": 9, "longitud_maxima": 9},
-    ]
-    
-    for prefijo_data in prefijos:
-        insert_prefijo_query = text("""
-            INSERT INTO prefijos (zona_id, prefijo, longitud_minima, longitud_maxima)
-            VALUES (:zona_id, :prefijo, :longitud_minima, :longitud_maxima)
-        """)
-        
-        db.execute(insert_prefijo_query, {
-            "zona_id": prefijo_data["zona_id"],
-            "prefijo": prefijo_data["prefijo"],
-            "longitud_minima": prefijo_data["longitud_minima"],
-            "longitud_maxima": prefijo_data["longitud_maxima"]
-        })
-    
-    db.commit()
-    db.close()
 
 def determinar_zona_y_tarifa(numero_marcado: str, db):
     """
@@ -858,6 +937,10 @@ def check_balance_for_call(calling_number: str, called_number: str):
 @app.on_event("startup")
 def startup_event():
     inicializar_zonas_y_prefijos()
+    # Sincronizar tabla para el motor Rust
+    db = SessionLocal()
+    sync_rate_cards(db)
+    db.close()
 
 # Función para determinar la zona de un número
 def determinar_zona(numero):
@@ -865,9 +948,9 @@ def determinar_zona(numero):
     
     # Consultar todos los prefijos ordenados por longitud descendente
     query = text("""
-        SELECT id, zona_id, prefijo, longitud_minima, longitud_maxima 
-        FROM prefijos 
-        ORDER BY LENGTH(prefijo) DESC
+        SELECT id, zone_id, prefix as prefijo, prefix_length as longitud_minima, prefix_length as longitud_maxima 
+        FROM prefixes 
+        ORDER BY LENGTH(prefix) DESC
     """)
     
     prefijos = db.execute(query).fetchall()
@@ -892,10 +975,10 @@ def obtener_tarifa(zona_id):
     db = SessionLocal()
     
     query = text("""
-        SELECT tarifa_segundo 
-        FROM tarifas 
-        WHERE zona_id = :zona_id AND activa = TRUE 
-        ORDER BY fecha_inicio DESC 
+        SELECT rate_per_minute / 60 as tarifa_segundo 
+        FROM rate_zones 
+        WHERE zone_id = :zona_id AND enabled = TRUE 
+        ORDER BY effective_from DESC 
         LIMIT 1
     """)
     
@@ -1060,11 +1143,11 @@ def get_rate_by_zone(db, zona_id: int) -> float:
     """
     try:
         query = text("""
-            SELECT tarifa_segundo 
-            FROM tarifas 
-            WHERE zona_id = :zona_id 
-              AND activa = true
-            ORDER BY fecha_inicio DESC
+            SELECT rate_per_minute / 60 as tarifa_segundo 
+            FROM rate_zones 
+            WHERE zone_id = :zona_id 
+              AND enabled = true
+            ORDER BY effective_from DESC
             LIMIT 1
         """)
         
@@ -1110,9 +1193,9 @@ def get_zone_by_prefix(db, called_number: str) -> int:
         # Obtener todos los prefijos ordenados por longitud descendente
         # Esto prioriza prefijos más específicos (más largos) sobre los generales
         query = text("""
-            SELECT zona_id, prefijo, longitud_minima, longitud_maxima
-            FROM prefijos 
-            ORDER BY LENGTH(prefijo) DESC, prefijo
+            SELECT zone_id, prefix as prefijo, prefix_length as longitud_minima, prefix_length as longitud_maxima
+            FROM prefixes 
+            ORDER BY LENGTH(prefix) DESC, prefix
         """)
         
         prefijos = db.execute(query).fetchall()
@@ -1211,7 +1294,7 @@ def create_cdr(event: CallEvent):
         
         # 10. Obtener información de la zona para logging/debugging
         zona_info = db.execute(
-            text("SELECT nombre FROM zonas WHERE id = :zona_id"),
+            text("SELECT zone_name as nombre FROM zones WHERE id = :zona_id"),
             {"zona_id": zona_id}
         ).fetchone()
         
@@ -3183,7 +3266,7 @@ async def dashboard_zonas(request: Request, user=Depends(admin_only)):
         
     db = SessionLocal()
     
-    query = text("SELECT id, nombre, descripcion FROM zonas ORDER BY nombre")
+    query = text("SELECT id, zone_name as nombre, description as descripcion FROM zones ORDER BY zone_name")
     zonas = db.execute(query).fetchall()
     
     db.close()
@@ -3192,44 +3275,71 @@ async def dashboard_zonas(request: Request, user=Depends(admin_only)):
         "request": request, "zonas": zonas, "user": user
     })
 
+
 @app.get("/dashboard/prefijos")
-async def dashboard_prefijos(request: Request, zona_id: int = None, user=Depends(admin_only)):
+async def dashboard_prefijos(request: Request, user=Depends(admin_only), zona_id: int = Query(None)):
     if isinstance(user, RedirectResponse):
         return user
         
     db = SessionLocal()
-    
-    zonas_query = text("SELECT id, nombre FROM zonas ORDER BY nombre")
-    zonas = db.execute(zonas_query).fetchall()
-    
-    if zona_id:
-        prefijos_query = text("""
-            SELECT p.id, p.zona_id, p.prefijo, p.longitud_minima, p.longitud_maxima, z.nombre as zona_nombre
-            FROM prefijos p
-            JOIN zonas z ON p.zona_id = z.id
-            WHERE p.zona_id = :zona_id
-            ORDER BY p.prefijo
-        """)
-        prefijos = db.execute(prefijos_query, {"zona_id": zona_id}).fetchall()
+    try:
+        # Obtener zonas para el dropdown
+        zonas_query = db.execute(text("""
+            SELECT id, zone_name 
+            FROM zones 
+            WHERE enabled = true
+            ORDER BY zone_name
+        """)).fetchall()
+        zonas = [[z.id, z.zone_name] for z in zonas_query]
         
-        zona_query = text("SELECT id, nombre FROM zonas WHERE id = :zona_id")
-        zona_actual = db.execute(zona_query, {"zona_id": zona_id}).fetchone()
-    else:
-        prefijos_query = text("""
-            SELECT p.id, p.zona_id, p.prefijo, p.longitud_minima, p.longitud_maxima, z.nombre as zona_nombre
-            FROM prefijos p
-            JOIN zonas z ON p.zona_id = z.id
-            ORDER BY z.nombre, p.prefijo
-        """)
-        prefijos = db.execute(prefijos_query).fetchall()
-        zona_actual = None
-    
-    db.close()
-    
-    return templates.TemplateResponse("dashboard_prefijos.html", {
-        "request": request, "prefijos": prefijos, "zonas": zonas, 
-        "zona_actual": zona_actual, "user": user
-    })
+        # Obtener prefijos
+        if zona_id:
+            prefijos_query = db.execute(text("""
+                SELECT 
+                    p.id,
+                    p.zone_id,
+                    p.prefix,
+                    LENGTH(p.prefix) as longitud_minima,  -- Longitud del prefijo mismo
+                    p.prefix_length as longitud_maxima,   -- Longitud máxima del número completo
+                    z.zone_name,
+                    COALESCE(p.operator_name, 'N/A')
+                FROM prefixes p
+                LEFT JOIN zones z ON p.zone_id = z.id
+                WHERE p.zone_id = :zona_id AND p.enabled = true
+                ORDER BY p.prefix
+            """), {"zona_id": zona_id}).fetchall()
+            
+            prefijos = [[p[0], p[1], p[2], p[3], p[4], p[5], p[6]] for p in prefijos_query]
+            zona_actual = [zona_id, next((z[1] for z in zonas if z[0] == zona_id), None)]
+        else:
+            prefijos_query = db.execute(text("""
+                SELECT 
+                    p.id,
+                    p.zone_id,
+                    p.prefix,
+                    LENGTH(p.prefix) as longitud_minima,
+                    p.prefix_length as longitud_maxima,
+                    z.zone_name,
+                    COALESCE(p.operator_name, 'N/A')
+                FROM prefixes p
+                LEFT JOIN zones z ON p.zone_id = z.id
+                WHERE p.enabled = true
+                ORDER BY p.prefix
+                LIMIT 100
+            """)).fetchall()
+            
+            prefijos = [[p[0], p[1], p[2], p[3], p[4], p[5], p[6]] for p in prefijos_query]
+            zona_actual = None
+        
+        return templates.TemplateResponse("dashboard_prefijos.html", {
+            "request": request,
+            "prefijos": prefijos,
+            "zonas": zonas,
+            "zona_actual": zona_actual,
+            "user": user
+        })
+    finally:
+        db.close()
 
 @app.get("/dashboard/tarifas")
 async def dashboard_tarifas(request: Request, zona_id: int = None, user=Depends(admin_only)):
@@ -3238,27 +3348,27 @@ async def dashboard_tarifas(request: Request, zona_id: int = None, user=Depends(
         
     db = SessionLocal()
     
-    zonas_query = text("SELECT id, nombre FROM zonas ORDER BY nombre")
+    zonas_query = text("SELECT id, zone_name as nombre FROM zones ORDER BY zone_name")
     zonas = db.execute(zonas_query).fetchall()
     
     if zona_id:
         tarifas_query = text("""
-            SELECT t.id, t.zona_id, t.tarifa_segundo, t.fecha_inicio, t.activa, z.nombre as zona_nombre
-            FROM tarifas t
-            JOIN zonas z ON t.zona_id = z.id
-            WHERE t.zona_id = :zona_id
-            ORDER BY t.fecha_inicio DESC
+            SELECT t.id, t.zone_id, t.rate_per_minute / 60 as tarifa_segundo, t.effective_from as fecha_inicio, t.enabled as activa, z.zone_name as zona_nombre
+            FROM rate_zones t
+            JOIN zones z ON t.zone_id = z.id
+            WHERE t.zone_id = :zona_id
+            ORDER BY t.effective_from DESC
         """)
         tarifas = db.execute(tarifas_query, {"zona_id": zona_id}).fetchall()
         
-        zona_query = text("SELECT id, nombre FROM zonas WHERE id = :zona_id")
+        zona_query = text("SELECT id, zone_name as nombre FROM zones WHERE id = :zona_id")
         zona_actual = db.execute(zona_query, {"zona_id": zona_id}).fetchone()
     else:
         tarifas_query = text("""
-            SELECT t.id, t.zona_id, t.tarifa_segundo, t.fecha_inicio, t.activa, z.nombre as zona_nombre
-            FROM tarifas t
-            JOIN zonas z ON t.zona_id = z.id
-            ORDER BY z.nombre, t.fecha_inicio DESC
+            SELECT t.id, t.zone_id, t.rate_per_minute / 60 as tarifa_segundo, t.effective_from as fecha_inicio, t.enabled as activa, z.zone_name as zona_nombre
+            FROM rate_zones t
+            JOIN zones z ON t.zone_id = z.id
+            ORDER BY z.zone_name, t.effective_from DESC
         """)
         tarifas = db.execute(tarifas_query).fetchall()
         zona_actual = None
@@ -3285,18 +3395,18 @@ def dashboard_estadisticas_zona(request: Request,
     # Consulta SQL
     query = f"""
         SELECT 
-            z.nombre as zona_nombre,
+            z.zone_name as zona_nombre,
             COUNT(*) as total_llamadas,
             SUM(c.duration_seconds) / 60.0 as duracion_total_minutos,
             SUM(c.cost) as costo_total,
             AVG(c.cost) as costo_promedio,
             AVG(c.duration_seconds) / 60.0 as duracion_promedio_minutos
         FROM cdr c
-        JOIN prefijos p ON SUBSTR(c.called_number, 1, LENGTH(p.prefijo)) = p.prefijo
-        JOIN zonas z ON p.zona_id = z.id
+        JOIN prefixes p ON SUBSTR(c.called_number, 1, LENGTH(p.prefix)) = p.prefix
+        JOIN zones z ON p.zone_id = z.id
         WHERE c.start_time >= '{fecha_inicio} 00:00:00'
           AND c.start_time <= '{fecha_fin} 23:59:59'
-        GROUP BY z.id, z.nombre
+        GROUP BY z.id, z.zone_name
         ORDER BY costo_total DESC
     """
     estadisticas = db.execute(text(query)).fetchall()
@@ -3368,9 +3478,9 @@ def export_cdr_pdf(
             SELECT c.calling_number, c.called_number, 
                    c.start_time, c.end_time, c.duration_seconds, 
                    c.duration_billable, c.cost, c.status,
-                   z.nombre as zona
+                   z.zone_name as zona
             FROM cdr c
-            LEFT JOIN zonas z ON c.zona_id = z.id
+            LEFT JOIN zones z ON c.zona_id = z.id
             WHERE 1=1
         """
         
@@ -3585,9 +3695,9 @@ def export_cdr_excel(
             SELECT c.calling_number, c.called_number, 
                    c.start_time, c.end_time, c.duration_seconds, 
                    c.duration_billable, c.cost, c.status,
-                   z.nombre as zona
+                   z.zone_name as zona
             FROM cdr c
-            LEFT JOIN zonas z ON c.zona_id = z.id
+            LEFT JOIN zones z ON c.zona_id = z.id
             WHERE 1=1
         """
         
@@ -3733,13 +3843,13 @@ async def export_consumo_zona_pdf(user=Depends(admin_only)):
     
     # Estadísticas de consumo por zona (últimos 30 días)
     stats_query = text("""
-        SELECT z.nombre, COUNT(c.id) as total_llamadas, 
+        SELECT z.zone_name, COUNT(c.id) as total_llamadas, 
                SUM(c.duration_seconds) as total_duracion, 
                SUM(c.cost) as total_costo
         FROM cdr c
-        JOIN zonas z ON c.zona_id = z.id
+        JOIN zones z ON c.zona_id = z.id
         WHERE c.start_time >= NOW() - INTERVAL '30 days'
-        GROUP BY z.nombre
+        GROUP BY z.zone_name
         ORDER BY total_costo DESC
     """)
     estadisticas = db.execute(stats_query).fetchall()
@@ -3791,7 +3901,7 @@ async def listar_zonas(user=Depends(authenticated_user)):
         return user
         
     db = SessionLocal()
-    query = text("SELECT id, nombre, descripcion FROM zonas ORDER BY nombre")
+    query = text("SELECT id, zone_name as nombre, description as descripcion FROM zones ORDER BY zone_name")
     zonas = db.execute(query).fetchall()
     
     result = []
@@ -3813,7 +3923,8 @@ async def crear_zona(zona: ZonaCreate, user=Depends(admin_only)):
     db = SessionLocal()
     
     # Verificar que no exista otra zona con el mismo nombre
-    check_query = text("SELECT id FROM zonas WHERE nombre = :nombre")
+    # Verificar que no exista otra zona con el mismo nombre
+    check_query = text("SELECT id FROM zones WHERE zone_name = :nombre")
     existing = db.execute(check_query, {"nombre": zona.nombre}).fetchone()
     
     if existing:
@@ -3821,28 +3932,41 @@ async def crear_zona(zona: ZonaCreate, user=Depends(admin_only)):
         raise HTTPException(status_code=400, detail="Ya existe una zona con ese nombre")
     
     # Crear la zona
+    # Crear la zona con defaults para la tabla zones (apolobilling)
     insert_query = text("""
-        INSERT INTO zonas (nombre, descripcion)
-        VALUES (:nombre, :descripcion)
+        INSERT INTO zones (zone_name, description, country_id, zone_code, zone_type, region_name, enabled, created_at, updated_at)
+        VALUES (:nombre, :descripcion, 4, :code, 'GEOGRAPHIC', 'Default', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         RETURNING id
     """)
     
+    # Generar un código simple basado en el nombre
+    code = zona.nombre.upper().replace(" ", "-")[:20]
+    
     result = db.execute(insert_query, {
         "nombre": zona.nombre,
-        "descripcion": zona.descripcion
+        "descripcion": zona.descripcion,
+        "code": code
     })
     
     zona_id = result.fetchone()[0]
     
     # Crear una tarifa por defecto para la zona
+    # Crear una tarifa por defecto para la zona en rate_zones
+    # rate_zones requeridos: zone_id, rate_name, rate_per_minute, rate_per_call, billing_increment, min_duration, effective_from, currency, priority, enabled
     insert_tarifa_query = text("""
-        INSERT INTO tarifas (zona_id, tarifa_segundo, fecha_inicio, activa)
-        VALUES (:zona_id, :tarifa_segundo, CURRENT_TIMESTAMP, TRUE)
+        INSERT INTO rate_zones (
+            zone_id, rate_name, rate_per_minute, rate_per_call, billing_increment, 
+            min_duration, effective_from, currency, priority, enabled, created_at, updated_at
+        )
+        VALUES (
+            :zona_id, 'Default Rate', :rate_per_minute, 0, 60, 
+            0, CURRENT_TIMESTAMP, 'USD', 1, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
     """)
     
     db.execute(insert_tarifa_query, {
         "zona_id": zona_id,
-        "tarifa_segundo": 0.0005  # Tarifa por defecto: 0.03 por minuto
+        "rate_per_minute": 0.03  # $0.03/min
     })
     
     db.commit()
@@ -3858,7 +3982,7 @@ async def actualizar_zona(zona_id: int, zona: ZonaCreate, user=Depends(admin_onl
     db = SessionLocal()
     
     # Verificar que la zona exista
-    check_query = text("SELECT id FROM zonas WHERE id = :zona_id")
+    check_query = text("SELECT id FROM zones WHERE id = :zona_id")
     existing = db.execute(check_query, {"zona_id": zona_id}).fetchone()
     
     if not existing:
@@ -3866,7 +3990,7 @@ async def actualizar_zona(zona_id: int, zona: ZonaCreate, user=Depends(admin_onl
         raise HTTPException(status_code=404, detail="Zona no encontrada")
     
     # Verificar que no exista otra zona con el mismo nombre
-    check_name_query = text("SELECT id FROM zonas WHERE nombre = :nombre AND id != :zona_id")
+    check_name_query = text("SELECT id FROM zones WHERE zone_name = :nombre AND id != :zona_id")
     existing_name = db.execute(check_name_query, {"nombre": zona.nombre, "zona_id": zona_id}).fetchone()
     
     if existing_name:
@@ -3875,8 +3999,8 @@ async def actualizar_zona(zona_id: int, zona: ZonaCreate, user=Depends(admin_onl
     
     # Actualizar la zona
     update_query = text("""
-        UPDATE zonas
-        SET nombre = :nombre, descripcion = :descripcion
+        UPDATE zones
+        SET zone_name = :nombre, description = :descripcion, updated_at = CURRENT_TIMESTAMP
         WHERE id = :zona_id
     """)
     
@@ -3899,7 +4023,7 @@ async def eliminar_zona(zona_id: int, user=Depends(admin_only)):
     db = SessionLocal()
     
     # Verificar que la zona exista
-    check_query = text("SELECT id FROM zonas WHERE id = :zona_id")
+    check_query = text("SELECT id FROM zones WHERE id = :zona_id")
     existing = db.execute(check_query, {"zona_id": zona_id}).fetchone()
     
     if not existing:
@@ -3907,10 +4031,10 @@ async def eliminar_zona(zona_id: int, user=Depends(admin_only)):
         raise HTTPException(status_code=404, detail="Zona no encontrada")
     
     # Verificar si tiene prefijos o tarifas asociadas
-    check_prefijos_query = text("SELECT COUNT(*) FROM prefijos WHERE zona_id = :zona_id")
+    check_prefijos_query = text("SELECT COUNT(*) FROM prefixes WHERE zone_id = :zona_id")
     prefijos_count = db.execute(check_prefijos_query, {"zona_id": zona_id}).scalar()
     
-    check_tarifas_query = text("SELECT COUNT(*) FROM tarifas WHERE zona_id = :zona_id")
+    check_tarifas_query = text("SELECT COUNT(*) FROM rate_zones WHERE zone_id = :zona_id")
     tarifas_count = db.execute(check_tarifas_query, {"zona_id": zona_id}).scalar()
     
     if prefijos_count > 0 or tarifas_count > 0:
@@ -3921,13 +4045,71 @@ async def eliminar_zona(zona_id: int, user=Depends(admin_only)):
         )
     
     # Eliminar la zona
-    delete_query = text("DELETE FROM zonas WHERE id = :zona_id")
+    delete_query = text("DELETE FROM zones WHERE id = :zona_id")
     db.execute(delete_query, {"zona_id": zona_id})
     
     db.commit()
     db.close()
     
     return {"message": "Zona eliminada correctamente"}
+
+
+# Endpoint de diagnóstico para verificar zonas
+@app.get("/api/debug/zonas")
+async def debug_zonas(user=Depends(authenticated_user)):
+    """Endpoint de diagnóstico para verificar el estado de las zonas en la base de datos"""
+    if isinstance(user, RedirectResponse):
+        return user
+        
+    db = SessionLocal()
+    
+    try:
+        # Contar zonas
+        count_query = text("SELECT COUNT(*) FROM zones")
+        total_zonas = db.execute(count_query).scalar()
+        
+        # Obtener todas las zonas con todos sus campos
+        zonas_query = text("SELECT id, zone_name as nombre, description as descripcion FROM zones ORDER BY id")
+        zonas = db.execute(zonas_query).fetchall()
+        
+        # Contar prefijos por zona
+        prefijos_query = text("""
+            SELECT z.id, z.zone_name, COUNT(p.id) as total_prefijos
+            FROM zones z
+            LEFT JOIN prefixes p ON z.id = p.zone_id
+            GROUP BY z.id, z.zone_name
+            ORDER BY z.id
+        """)
+        prefijos_por_zona = db.execute(prefijos_query).fetchall()
+        
+        zonas_detalle = []
+        for zona in zonas:
+            # Buscar el conteo de prefijos para esta zona
+            prefijos_count = 0
+            for pz in prefijos_por_zona:
+                if pz[0] == zona[0]:
+                    prefijos_count = pz[2]
+                    break
+            
+            zonas_detalle.append({
+                "id": zona[0],
+                "nombre": zona[1],
+                "descripcion": zona[2],
+                "total_prefijos": prefijos_count
+            })
+        
+        return {
+            "total_zonas": total_zonas,
+            "zonas": zonas_detalle,
+            "mensaje": f"Se encontraron {total_zonas} zonas en la base de datos"
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "mensaje": "Error al consultar la base de datos"
+        }
+    finally:
+        db.close()
 
 # API para el módulo de prefijos
 @app.get("/api/prefijos")
@@ -3939,19 +4121,19 @@ async def listar_prefijos(zona_id: int = None, user=Depends(authenticated_user))
     
     if zona_id:
         query = text("""
-            SELECT p.id, p.zona_id, p.prefijo, p.longitud_minima, p.longitud_maxima, z.nombre as zona_nombre
-            FROM prefijos p
-            JOIN zonas z ON p.zona_id = z.id
-            WHERE p.zona_id = :zona_id
-            ORDER BY p.prefijo
+            SELECT p.id, p.zone_id as zona_id, p.prefix as prefijo, p.prefix_length as longitud_minima, p.prefix_length as longitud_maxima, z.zone_name as zona_nombre
+            FROM prefixes p
+            JOIN zones z ON p.zone_id = z.id
+            WHERE p.zone_id = :zona_id
+            ORDER BY p.prefix
         """)
         prefijos = db.execute(query, {"zona_id": zona_id}).fetchall()
     else:
         query = text("""
-            SELECT p.id, p.zona_id, p.prefijo, p.longitud_minima, p.longitud_maxima, z.nombre as zona_nombre
-            FROM prefijos p
-            JOIN zonas z ON p.zona_id = z.id
-            ORDER BY z.nombre, p.prefijo
+            SELECT p.id, p.zone_id as zona_id, p.prefix as prefijo, p.prefix_length as longitud_minima, p.prefix_length as longitud_maxima, z.zone_name as zona_nombre
+            FROM prefixes p
+            JOIN zones z ON p.zone_id = z.id
+            ORDER BY z.zone_name, p.prefix
         """)
         prefijos = db.execute(query).fetchall()
     
@@ -3977,7 +4159,7 @@ async def crear_prefijo(prefijo: PrefijoCreate, user=Depends(admin_only)):
     db = SessionLocal()
     
     # Verificar que la zona exista
-    check_zona_query = text("SELECT id FROM zonas WHERE id = :zona_id")
+    check_zona_query = text("SELECT id FROM zones WHERE id = :zona_id")
     existing_zona = db.execute(check_zona_query, {"zona_id": prefijo.zona_id}).fetchone()
     
     if not existing_zona:
@@ -3990,26 +4172,30 @@ async def crear_prefijo(prefijo: PrefijoCreate, user=Depends(admin_only)):
         raise HTTPException(status_code=400, detail="La longitud mínima no puede ser mayor que la longitud máxima")
     
     # Insertar el prefijo
+    # Insertar el prefijo en prefixes
     insert_query = text("""
-        INSERT INTO prefijos (zona_id, prefijo, longitud_minima, longitud_maxima)
-        VALUES (:zona_id, :prefijo, :longitud_minima, :longitud_maxima)
+        INSERT INTO prefixes (zone_id, prefix, prefix_length, operator_name, network_type, enabled, created_at, updated_at)
+        VALUES (:zona_id, :prefijo, :longitud_minima, 'Default', 'UNKNOWN', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         RETURNING id
     """)
     
     result = db.execute(insert_query, {
         "zona_id": prefijo.zona_id,
         "prefijo": prefijo.prefijo,
-        "longitud_minima": prefijo.longitud_minima,
-        "longitud_maxima": prefijo.longitud_maxima
+        "longitud_minima": prefijo.longitud_minima
     })
     
     prefijo_id = result.fetchone()[0]
     
     # Obtener el nombre de la zona
-    zona_query = text("SELECT nombre FROM zonas WHERE id = :zona_id")
+    zona_query = text("SELECT zone_name as nombre FROM zones WHERE id = :zona_id")
     zona_nombre = db.execute(zona_query, {"zona_id": prefijo.zona_id}).fetchone()[0]
     
     db.commit()
+    
+    # Sincronizar con el motor Rust
+    sync_rate_cards(db)
+    
     db.close()
     
     return {
@@ -4021,64 +4207,65 @@ async def crear_prefijo(prefijo: PrefijoCreate, user=Depends(admin_only)):
         "zona_nombre": zona_nombre
     }
 
+
 @app.put("/api/prefijos/{prefijo_id}")
-async def actualizar_prefijo(prefijo_id: int, prefijo: PrefijoCreate, user=Depends(admin_only)):
-    if isinstance(user, RedirectResponse):
-        return user
+async def api_update_prefijo(
+    prefijo_id: int,
+    zona_id: int = Form(...),
+    prefijo: str = Form(...),
+    longitud_minima: int = Form(...),
+    longitud_maxima: int = Form(...),
+    db: Session = Depends(get_db),
+    user = Depends(get_admin_user)
+):
+    """Actualizar un prefijo existente"""
+    try:
+        # Verificar que el prefijo existe
+        existing = db.execute(text("SELECT id FROM prefixes WHERE id = :id"), 
+                            {"id": prefijo_id}).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Prefijo no encontrado")
         
-    db = SessionLocal()
-    
-    # Verificar que el prefijo exista
-    check_query = text("SELECT id FROM prefijos WHERE id = :prefijo_id")
-    existing = db.execute(check_query, {"prefijo_id": prefijo_id}).fetchone()
-    
-    if not existing:
+        # Validar que la zona existe
+        zona = db.execute(text("SELECT id FROM zones WHERE id = :zona_id"), 
+                         {"zona_id": zona_id}).fetchone()
+        if not zona:
+            raise HTTPException(status_code=404, detail="Zona no encontrada")
+        
+        # Validar longitudes
+        if longitud_minima > longitud_maxima:
+            raise HTTPException(status_code=400, 
+                              detail="La longitud mínima no puede ser mayor que la máxima")
+        
+        # Actualizar prefijo (solo guardamos longitud_maxima en prefix_length)
+        db.execute(text("""
+            UPDATE prefixes
+            SET zone_id = :zone_id,
+                prefix = :prefix,
+                prefix_length = :prefix_length,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+        """), {
+            "id": prefijo_id,
+            "zone_id": zona_id,
+            "prefix": prefijo,
+            "prefix_length": longitud_maxima  # Solo guardamos la máxima
+        })
+        db.commit()
+        
+        # Sincronizar con motor Rust
+        sync_rate_cards(db)
+        
+        return {"success": True, "message": "Prefijo actualizado correctamente"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
         db.close()
-        raise HTTPException(status_code=404, detail="Prefijo no encontrado")
-    
-    # Verificar que la zona exista
-    check_zona_query = text("SELECT id FROM zonas WHERE id = :zona_id")
-    existing_zona = db.execute(check_zona_query, {"zona_id": prefijo.zona_id}).fetchone()
-    
-    if not existing_zona:
-        db.close()
-        raise HTTPException(status_code=404, detail="Zona no encontrada")
-    
-    # Validar longitudes
-    if prefijo.longitud_minima > prefijo.longitud_maxima:
-        db.close()
-        raise HTTPException(status_code=400, detail="La longitud mínima no puede ser mayor que la longitud máxima")
-    
-    # Actualizar el prefijo
-    update_query = text("""
-        UPDATE prefijos
-        SET zona_id = :zona_id, prefijo = :prefijo, longitud_minima = :longitud_minima, longitud_maxima = :longitud_maxima
-        WHERE id = :prefijo_id
-    """)
-    
-    db.execute(update_query, {
-        "prefijo_id": prefijo_id,
-        "zona_id": prefijo.zona_id,
-        "prefijo": prefijo.prefijo,
-        "longitud_minima": prefijo.longitud_minima,
-        "longitud_maxima": prefijo.longitud_maxima
-    })
-    
-    # Obtener el nombre de la zona
-    zona_query = text("SELECT nombre FROM zonas WHERE id = :zona_id")
-    zona_nombre = db.execute(zona_query, {"zona_id": prefijo.zona_id}).fetchone()[0]
-    
-    db.commit()
-    db.close()
-    
-    return {
-        "id": prefijo_id,
-        "zona_id": prefijo.zona_id,
-        "prefijo": prefijo.prefijo,
-        "longitud_minima": prefijo.longitud_minima,
-        "longitud_maxima": prefijo.longitud_maxima,
-        "zona_nombre": zona_nombre
-    }
+        
 
 @app.delete("/api/prefijos/{prefijo_id}")
 async def eliminar_prefijo(prefijo_id: int, user=Depends(admin_only)):
@@ -4088,7 +4275,7 @@ async def eliminar_prefijo(prefijo_id: int, user=Depends(admin_only)):
     db = SessionLocal()
     
     # Verificar que el prefijo exista
-    check_query = text("SELECT id FROM prefijos WHERE id = :prefijo_id")
+    check_query = text("SELECT id FROM prefixes WHERE id = :prefijo_id")
     existing = db.execute(check_query, {"prefijo_id": prefijo_id}).fetchone()
     
     if not existing:
@@ -4096,10 +4283,15 @@ async def eliminar_prefijo(prefijo_id: int, user=Depends(admin_only)):
         raise HTTPException(status_code=404, detail="Prefijo no encontrado")
     
     # Eliminar el prefijo
-    delete_query = text("DELETE FROM prefijos WHERE id = :prefijo_id")
+    # Eliminar el prefijo
+    delete_query = text("DELETE FROM prefixes WHERE id = :prefijo_id")
     db.execute(delete_query, {"prefijo_id": prefijo_id})
     
     db.commit()
+    
+    # Sincronizar con el motor Rust
+    sync_rate_cards(db)
+    
     db.close()
     
     return {"message": "Prefijo eliminado correctamente"}
@@ -4114,19 +4306,19 @@ async def listar_tarifas(zona_id: int = None, user=Depends(authenticated_user)):
     
     if zona_id:
         query = text("""
-            SELECT t.id, t.zona_id, t.tarifa_segundo, t.fecha_inicio, t.activa, z.nombre as zona_nombre
-            FROM tarifas t
-            JOIN zonas z ON t.zona_id = z.id
-            WHERE t.zona_id = :zona_id
-            ORDER BY t.fecha_inicio DESC
+            SELECT t.id, t.zone_id, t.rate_per_minute / 60 as tarifa_segundo, t.effective_from as fecha_inicio, t.enabled as activa, z.zone_name as zona_nombre
+            FROM rate_zones t
+            JOIN zones z ON t.zone_id = z.id
+            WHERE t.zone_id = :zona_id
+            ORDER BY t.effective_from DESC
         """)
         tarifas = db.execute(query, {"zona_id": zona_id}).fetchall()
     else:
         query = text("""
-            SELECT t.id, t.zona_id, t.tarifa_segundo, t.fecha_inicio, t.activa, z.nombre as zona_nombre
-            FROM tarifas t
-            JOIN zonas z ON t.zona_id = z.id
-            ORDER BY z.nombre, t.fecha_inicio DESC
+            SELECT t.id, t.zone_id, t.rate_per_minute / 60 as tarifa_segundo, t.effective_from as fecha_inicio, t.enabled as activa, z.zone_name as zona_nombre
+            FROM rate_zones t
+            JOIN zones z ON t.zone_id = z.id
+            ORDER BY z.zone_name, t.effective_from DESC
         """)
         tarifas = db.execute(query).fetchall()
     
@@ -4152,7 +4344,7 @@ async def crear_tarifa(tarifa: TarifaCreate, user=Depends(admin_only)):
     db = SessionLocal()
     
     # Verificar que la zona exista
-    check_zona_query = text("SELECT id FROM zonas WHERE id = :zona_id")
+    check_zona_query = text("SELECT id FROM zones WHERE id = :zona_id")
     existing_zona = db.execute(check_zona_query, {"zona_id": tarifa.zona_id}).fetchone()
     
     if not existing_zona:
@@ -4161,23 +4353,31 @@ async def crear_tarifa(tarifa: TarifaCreate, user=Depends(admin_only)):
     
     # Desactivar las tarifas anteriores de esta zona
     update_query = text("""
-        UPDATE tarifas 
-        SET activa = FALSE 
-        WHERE zona_id = :zona_id AND activa = TRUE
+        UPDATE rate_zones 
+        SET enabled = FALSE 
+        WHERE zone_id = :zona_id AND enabled = TRUE
     """)
     
     db.execute(update_query, {"zona_id": tarifa.zona_id})
     
     # Insertar la nueva tarifa
+    # Insertar la nueva tarifa en rate_zones
+    # tarifa_segundo entra, guardar como rate_per_minute (*60)
     insert_query = text("""
-        INSERT INTO tarifas (zona_id, tarifa_segundo, fecha_inicio, activa)
-        VALUES (:zona_id, :tarifa_segundo, CURRENT_TIMESTAMP, TRUE)
-        RETURNING id, fecha_inicio
+        INSERT INTO rate_zones (
+            zone_id, rate_name, rate_per_minute, rate_per_call, billing_increment, 
+            min_duration, effective_from, currency, priority, enabled, created_at, updated_at
+        )
+        VALUES (
+            :zona_id, 'Manual Rate', :rate_per_minute, 0, 60, 
+            0, CURRENT_TIMESTAMP, 'USD', 1, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+        RETURNING id, effective_from
     """)
     
     result = db.execute(insert_query, {
         "zona_id": tarifa.zona_id,
-        "tarifa_segundo": tarifa.tarifa_segundo
+        "rate_per_minute": float(tarifa.tarifa_segundo) * 60
     })
     
     id_fecha = result.fetchone()
@@ -4185,10 +4385,14 @@ async def crear_tarifa(tarifa: TarifaCreate, user=Depends(admin_only)):
     fecha_inicio = id_fecha[1]
     
     # Obtener el nombre de la zona
-    zona_query = text("SELECT nombre FROM zonas WHERE id = :zona_id")
+    zona_query = text("SELECT zone_name as nombre FROM zones WHERE id = :zona_id")
     zona_nombre = db.execute(zona_query, {"zona_id": tarifa.zona_id}).fetchone()[0]
     
     db.commit()
+    
+    # Sincronizar con el motor Rust
+    sync_rate_cards(db)
+    
     db.close()
     
     return {
@@ -4208,7 +4412,7 @@ async def activar_tarifa(tarifa_id: int, user=Depends(admin_only)):
     db = SessionLocal()
     
     # Verificar que la tarifa exista
-    check_query = text("SELECT id, zona_id FROM tarifas WHERE id = :tarifa_id")
+    check_query = text("SELECT id, zone_id FROM rate_zones WHERE id = :tarifa_id")
     existing = db.execute(check_query, {"tarifa_id": tarifa_id}).fetchone()
     
     if not existing:
@@ -4219,17 +4423,17 @@ async def activar_tarifa(tarifa_id: int, user=Depends(admin_only)):
     
     # Desactivar las tarifas anteriores de esta zona
     update_other_query = text("""
-        UPDATE tarifas 
-        SET activa = FALSE 
-        WHERE zona_id = :zona_id AND id != :tarifa_id AND activa = TRUE
+        UPDATE rate_zones 
+        SET enabled = FALSE 
+        WHERE zone_id = :zona_id AND id != :tarifa_id AND enabled = TRUE
     """)
     
     db.execute(update_other_query, {"zona_id": zona_id, "tarifa_id": tarifa_id})
     
     # Activar esta tarifa
     update_query = text("""
-        UPDATE tarifas 
-        SET activa = TRUE 
+        UPDATE rate_zones 
+        SET enabled = TRUE 
         WHERE id = :tarifa_id
     """)
     

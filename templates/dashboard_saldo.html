@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Saldo Anexos{% endblock %}
-{% block header %}Saldo Anexos{% endblock %}
+{% block title %}Saldos{% endblock %}
+{% block header %}Saldos{% endblock %}
 
 {% block header_buttons %}
 <div class="btn-group">
@@ -40,7 +40,7 @@
             </div>
         </div>
     </div>
-    
+
     <!-- Quick Recharge -->
     <div class="col-lg-5">
         <div class="card mb-4">
@@ -51,7 +51,8 @@
                 <form id="rechargeForm" class="row g-3">
                     <div class="col-md-12">
                         <label for="extension" class="form-label">Anexo</label>
-                        <input type="text" class="form-control" id="extension" pattern="[0-9]+" title="Ingrese solo números para el anexo." required>
+                        <input type="text" class="form-control" id="extension" pattern="[0-9]+"
+                            title="Ingrese solo números para el anexo." required>
                     </div>
                     <div class="col-md-12">
                         <label for="amount" class="form-label">Monto ($)</label>
@@ -92,13 +93,11 @@
                         <td>{{ row[0] }}</td>
                         <td>${{ "%.2f"|format(row[1]) }}</td>
                         <td>
-                            {% if row[1] < 1.0 %}
-                            <span class="badge bg-danger">Crítico</span>
-                            {% elif row[1] < 5.0 %}
-                            <span class="badge bg-warning text-dark">Bajo</span>
-                            {% else %}
-                            <span class="badge bg-success">Normal</span>
-                            {% endif %}
+                            {% if row[1] < 1.0 %} <span class="badge bg-danger">Crítico</span>
+                                {% elif row[1] < 5.0 %} <span class="badge bg-warning text-dark">Bajo</span>
+                                    {% else %}
+                                    <span class="badge bg-success">Normal</span>
+                                    {% endif %}
                         </td>
                         <td>
                             <button class="btn btn-sm btn-primary quick-recharge" data-extension="{{ row[0] }}">
@@ -121,49 +120,49 @@
     const balanceChart = new Chart(ctx, {
         type: 'bar',
         data: {
-            labels: {{ labels|tojson }},
-            datasets: [{
-                label: 'Saldo ($)',
-                data: {{ data|tojson }},
-                backgroundColor: {{ background_colors|default([])|tojson }},
-                borderColor: {{ data|map('float')|map('lt', 1.0)|map('ternary', 'rgb(220, 53, 69)', 'rgb(13, 110, 253)')|list|tojson }},
-                borderWidth: 1
+            labels: {{ labels| tojson }},
+    datasets: [{
+        label: 'Saldo ($)',
+        data: {{ data| tojson }},
+        backgroundColor: {{ background_colors|default ([]) | tojson }},
+        borderColor: {{ data| map('float') | map('lt', 1.0) | map('ternary', 'rgb(220, 53, 69)', 'rgb(13, 110, 253)') | list | tojson }},
+        borderWidth: 1
             }]
         },
-        options: {
-            responsive: true,
+    options: {
+        responsive: true,
             scales: {
-                y: {
-                    beginAtZero: true
-                }
+            y: {
+                beginAtZero: true
             }
         }
+    }
     });
 
     // Quick Recharge Form
-    document.getElementById('rechargeForm').addEventListener('submit', async function(e) {
+    document.getElementById('rechargeForm').addEventListener('submit', async function (e) {
         e.preventDefault();
         const extension = document.getElementById('extension').value;
         const amount = document.getElementById('amount').value;
         const resultDiv = document.getElementById('rechargeResult');
-        
+
         try {
             const response = await fetch(`/recargar/${extension}/${amount}`, {
                 method: 'POST'
             });
             const data = await response.json();
-            
+
             resultDiv.innerHTML = `
                 <div class="alert alert-success">
                     <i class="bi bi-check-circle-fill"></i> ${data.message}
                 </div>
             `;
-            
+
             // Refresh page after 2 seconds
             setTimeout(() => {
                 location.reload();
             }, 2000);
-            
+
         } catch (error) {
             resultDiv.innerHTML = `
                 <div class="alert alert-danger">
@@ -175,7 +174,7 @@
 
     // Quick Recharge Buttons
     document.querySelectorAll('.quick-recharge').forEach(button => {
-        button.addEventListener('click', function() {
+        button.addEventListener('click', function () {
             const extension = this.dataset.extension;
             document.getElementById('extension').value = extension;
             document.getElementById('amount').focus();

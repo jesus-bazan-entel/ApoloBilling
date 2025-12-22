@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tarificador - {% block title %}{% endblock %}</title>
+    <title>Apolo Billing - {% block title %}{% endblock %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <link rel="stylesheet" href="{{ url_for('static', path='/css/styles.css') }}">
@@ -15,59 +16,60 @@
             min-height: 100vh;
             background-color: #212529 !important;
         }
-        
+
         #sidebar .nav-link {
             color: rgba(255, 255, 255, 0.55);
         }
-        
+
         #sidebar .nav-link:hover,
         #sidebar .nav-link.active {
             color: rgba(255, 255, 255, 0.85);
         }
-        
+
         .sb-sidenav-menu-nested {
             padding-left: 1.5rem;
         }
-        
+
         /* ✅ MEJORAR VISIBILIDAD DEL MENÚ COLAPSABLE */
         .sb-sidenav-menu-nested .nav-link {
             padding: 0.5rem 1rem;
             font-size: 0.9rem;
             color: rgba(255, 255, 255, 0.75) !important;
         }
-        
+
         .sb-sidenav-menu-nested .nav-link:hover {
             color: rgba(255, 255, 255, 0.95) !important;
             background-color: rgba(255, 255, 255, 0.1);
             border-radius: 0.25rem;
         }
-        
+
         .sb-sidenav-menu-nested .nav-link.active {
             color: #fff !important;
             background-color: #0d6efd;
             border-radius: 0.25rem;
         }
-        
+
         /* Asegurar que el contenido principal no se sobreponga */
         main {
             margin-left: 0;
         }
-        
+
         /* ✅ MEJORAR INDICADOR DE COLLAPSE */
         .nav-link[data-bs-toggle="collapse"] {
             position: relative;
         }
-        
+
         .nav-link[data-bs-toggle="collapse"] .bi-chevron-down {
             transition: transform 0.3s ease;
         }
-        
+
         .nav-link[data-bs-toggle="collapse"][aria-expanded="true"] .bi-chevron-down {
             transform: rotate(180deg);
         }
     </style>
     {% block extracss %}{% endblock %}
 </head>
+
 <body>
     <div class="container-fluid">
         <div class="row">
@@ -75,145 +77,120 @@
             <nav id="sidebar" class="col-md-3 col-lg-2 d-md-block bg-dark">
                 <div class="position-sticky pt-3">
                     <div class="text-center mb-4">
-                        <h3 class="text-light">Tarificador</h3>
+                        <h3 class="text-light">Apolo Billing</h3>
                     </div>
                     <ul class="nav flex-column">
-                        <!-- ✅ MENÚ ADMINISTRACIÓN CORREGIDO -->
+                        <!-- ✅ GESTIÓN COMERCIAL -->
+                        <div class="sb-sidenav-menu-heading">Gestión Comercial</div>
                         <li class="nav-item">
-                            <a class="nav-link collapsed" href="#" data-bs-toggle="collapse" data-bs-target="#collapseAdmin" 
-                               aria-expanded="{% if request.url.path.startswith('/dashboard/anexos') or request.url.path.startswith('/dashboard/fac') or request.url.path.startswith('/dashboard/cucm') or request.url.path.startswith('/dashboard/fac-pins') %}true{% else %}false{% endif %}" 
-                               aria-controls="collapseAdmin">
-                                <i class="bi bi-gear"></i>
-                                <span>Administración</span>
-                                <i class="bi bi-chevron-down ms-auto"></i>
+                            <a class="nav-link {% if request.url.path == '/dashboard/abonados' or request.url.path == '/dashboard/lineas' %}active{% endif %}"
+                                href="/dashboard/abonados">
+                                <i class="bi bi-people"></i> Gestión de Abonados
                             </a>
-                            <div id="collapseAdmin" 
-                                 class="collapse {% if request.url.path.startswith('/dashboard/anexos') or request.url.path.startswith('/dashboard/fac') or request.url.path.startswith('/dashboard/cucm') or request.url.path.startswith('/dashboard/fac-pins') %}show{% endif %}" 
-                                 aria-labelledby="headingAdmin">
-                                <nav class="sb-sidenav-menu-nested nav flex-column">
-                                    <!-- ✅ GESTIÓN DE ANEXOS -->
-                                    <a class="nav-link {% if request.url.path == '/dashboard/anexos' %}active{% endif %}" href="/dashboard/anexos">
-                                        <i class="bi bi-phone"></i> Gestión Anexos
-                                    </a>
-                                    
-                                    <!-- ✅ GESTIÓN CÓDIGOS PIN (EXISTENTE) -->
-                                    <a class="nav-link {% if request.url.path == '/dashboard/fac' %}active{% endif %}" href="/dashboard/fac">
-                                        <i class="bi bi-list-check"></i> Gestión Códigos PIN
-                                    </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.url.path == '/dashboard/planes' %}active{% endif %}"
+                                href="/dashboard/planes">
+                                <i class="bi bi-journal-text"></i> Planes Comerciales
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.url.path == '/dashboard/pines' %}active{% endif %}"
+                                href="/dashboard/pines">
+                                <i class="bi bi-key"></i> Credenciales (PINs)
+                            </a>
+                        </li>
 
-                                    <!-- ✅ NUEVA OPCIÓN: PINES FAC -->
-                                    <a class="nav-link {% if request.url.path == '/dashboard/fac_pins' %}active{% endif %}" href="/dashboard/fac_pins">
-                                        <i class="bi bi-shield-lock"></i> Anexos y Pines FAC
-                                    </a>
-                                    
-                                    <!-- ✅ CONFIGURACIÓN CUCM (SOLO ADMIN) -->
-                                    {% if not user or user.role == "admin" %}
-                                    <a class="nav-link {% if request.url.path == '/dashboard/cucm' %}active{% endif %}" href="/dashboard/cucm">
-                                        <i class="bi bi-server"></i> Configuración CUCM
-                                    </a>
-                                    {% endif %}
-                                </nav>
-                            </div>
-                        </li>
-                        
-                        <!-- ✅ MONITOREO DE LLAMADAS -->
+                        <!-- ✅ INGENIERÍA DE TRÁFICO -->
+                        <div class="sb-sidenav-menu-heading">Ingeniería de Tráfico</div>
+                        <a class="nav-link collapsed" href="#" data-bs-toggle="collapse"
+                            data-bs-target="#collapseTrafico"
+                            aria-expanded="{% if request.url.path.startswith('/dashboard/cdr') or request.url.path == '/dashboard/monitoreo' %}true{% else %}false{% endif %}"
+                            aria-controls="collapseTrafico">
+                            <div class="sb-nav-link-icon"><i class="bi bi-broadcast"></i></div>
+                            Tráfico & CDRs
+                        </a>
+                        <div class="collapse {% if request.url.path.startswith('/dashboard/cdr') or request.url.path == '/dashboard/monitoreo' or request.url.path == '/dashboard/metrics' %}show{% endif %}"
+                            id="collapseTrafico" aria-labelledby="headingTrafico" data-bs-parent="#sidenavAccordion">
+                            <nav class="sb-sidenav-menu-nested nav">
+                                <a class="nav-link" href="/dashboard/metrics"><i class="bi bi-graph-up me-2"></i>
+                                    Métricas (Grafana)</a>
+                                <a class="nav-link" href="/dashboard/monitoreo">Monitoreo en Vivo</a>
+                                <a class="nav-link" href="/dashboard/cdr">Histórico CDRs</a>
+                            </nav>
+                        </div>
+
+                        <a class="nav-link collapsed" href="#" data-bs-toggle="collapse"
+                            data-bs-target="#collapseRouting"
+                            aria-expanded="{% if request.url.path.startswith('/dashboard/zonas') or request.url.path.startswith('/dashboard/prefijos') or request.url.path.startswith('/dashboard/tarifas') %}true{% else %}false{% endif %}"
+                            aria-controls="collapseRouting">
+                            <div class="sb-nav-link-icon"><i class="bi bi-geo-alt"></i></div>
+                            Rutas & Tarifas
+                            <div class="sb-sidenav-collapse-arrow"><i class="fas fa-angle-down"></i></div>
+                        </a>
+                        <div class="collapse {% if request.url.path.startswith('/dashboard/zonas') or request.url.path.startswith('/dashboard/prefijos') or request.url.path.startswith('/dashboard/tarifas') %}show{% endif %}"
+                            id="collapseRouting" aria-labelledby="headingRouting" data-bs-parent="#sidenavAccordion">
+                            <nav class="sb-sidenav-menu-nested nav">
+                                <a class="nav-link" href="/dashboard/zonas">Zonas</a>
+                                <a class="nav-link" href="/dashboard/prefijos">Prefijos</a>
+                                <a class="nav-link" href="/dashboard/tarifas">Tarifas</a>
+                            </nav>
+                        </div>
+
+                        <!-- ✅ FACTURACIÓN -->
+                        <div class="sb-sidenav-menu-heading">Facturación</div>
                         <li class="nav-item">
-                            <a class="nav-link {% if request.url.path == '/dashboard/monitoreo' %}active{% endif %}" href="/dashboard/monitoreo">
-                                <i class="bi bi-headset"></i> Monitoreo de Llamadas
-                            </a>
-                        </li>
-                        
-                        <!-- ✅ SALDO ANEXOS -->
-                        <li class="nav-item">
-                            <a class="nav-link {% if request.url.path == '/dashboard/saldo' %}active{% endif %}" href="/dashboard/saldo">
-                                <i class="bi bi-wallet"></i> Saldo Anexos
-                            </a>
-                        </li>
-                        
-                        <!-- ✅ LLAMADAS CDR -->
-                        <li class="nav-item">
-                            <a class="nav-link {% if request.url.path == '/dashboard/cdr' %}active{% endif %}" href="/dashboard/cdr">
-                                <i class="bi bi-telephone"></i> Llamadas (CDR)
-                            </a>
-                        </li>
-                        
-                        <!-- ✅ FINANZAS -->
-                        <li class="nav-item">
-                            <a class="nav-link {% if request.url.path == '/dashboard/finanzas' %}active{% endif %}" href="/dashboard/finanzas">
-                                <i class="bi bi-graph-up"></i> Finanzas
-                            </a>
-                        </li>
-                        
-                        <!-- ✅ RECARGAS -->
-                        <li class="nav-item">
-                            <a class="nav-link {% if request.url.path == '/dashboard/recargas' %}active{% endif %}" href="/dashboard/recargas">
-                                <i class="bi bi-cash"></i> Recargas
-                            </a>
-                        </li>
-                        
-                        <!-- ✅ RANKING CONSUMO -->
-                        <li class="nav-item">
-                            <a class="nav-link {% if request.url.path == '/dashboard/ranking_consumo' %}active{% endif %}" href="/dashboard/ranking_consumo">
-                                <i class="bi bi-bar-chart"></i> Ranking Consumo
-                            </a>
-                        </li>
-                        
-                        <!-- ✅ ZONAS Y TARIFAS CORREGIDO -->
-                        <li class="nav-item">
-                            <a class="nav-link collapsed" href="#" data-bs-toggle="collapse" data-bs-target="#collapseZonas" 
-                               aria-expanded="{% if request.url.path.startswith('/dashboard/zonas') or request.url.path.startswith('/dashboard/prefijos') or request.url.path.startswith('/dashboard/tarifas') or request.url.path.startswith('/dashboard/estadisticas_zona') %}true{% else %}false{% endif %}" 
-                               aria-controls="collapseZonas">
-                                <i class="bi bi-globe"></i>
-                                <span>Zonas y Tarifas</span>
-                                <i class="bi bi-chevron-down ms-auto"></i>
-                            </a>
-                            <div id="collapseZonas" 
-                                 class="collapse {% if request.url.path.startswith('/dashboard/zonas') or request.url.path.startswith('/dashboard/prefijos') or request.url.path.startswith('/dashboard/tarifas') or request.url.path.startswith('/dashboard/estadisticas_zona') %}show{% endif %}" 
-                                 aria-labelledby="headingZonas">
-                                <nav class="sb-sidenav-menu-nested nav flex-column">
-                                    <a class="nav-link {% if request.url.path == '/dashboard/zonas' %}active{% endif %}" href="/dashboard/zonas">
-                                        <i class="bi bi-geo-alt"></i> Zonas
-                                    </a>
-                                    <a class="nav-link {% if request.url.path == '/dashboard/prefijos' %}active{% endif %}" href="/dashboard/prefijos">
-                                        <i class="bi bi-hash"></i> Prefijos
-                                    </a>
-                                    <a class="nav-link {% if request.url.path == '/dashboard/tarifas' %}active{% endif %}" href="/dashboard/tarifas">
-                                        <i class="bi bi-currency-dollar"></i> Tarifas
-                                    </a>
-                                    <a class="nav-link {% if request.url.path == '/dashboard/estadisticas_zona' %}active{% endif %}" href="/dashboard/estadisticas_zona">
-                                        <i class="bi bi-graph-up-arrow"></i> Estadísticas por Zona
-                                    </a>
-                                </nav>
-                            </div>
-                        </li>
-                        
-                        <!-- ✅ OPCIONES SOLO PARA ADMIN -->
-                        {% if not user or user.role == 'admin' %}
-                        <li class="nav-item">
-                            <a class="nav-link {% if request.url.path == '/dashboard/auditoria' %}active{% endif %}" href="/dashboard/auditoria">
-                                <i class="bi bi-shield-check"></i> Auditoría
+                            <a class="nav-link {% if request.url.path == '/dashboard/facturacion' or request.url.path == '/dashboard/finanzas' %}active{% endif %}"
+                                href="/dashboard/facturacion">
+                                <i class="bi bi-receipt"></i> Facturación & Cobros
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link {% if request.url.path == '/dashboard/recarga_masiva' %}active{% endif %}" href="/dashboard/recarga_masiva">
-                                <i class="bi bi-upload"></i> Recarga Masiva
+                            <a class="nav-link {% if request.url.path == '/dashboard/saldo' %}active{% endif %}"
+                                href="/dashboard/saldo">
+                                <i class="bi bi-wallet2"></i> Control de Crédito
+                            </a>
+                        </li>
+                        {% if user and user.role == 'admin' %}
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.url.path == '/dashboard/recargas' %}active{% endif %}"
+                                href="/dashboard/recargas">
+                                <i class="bi bi-cash-coin"></i> Pagos y Recargas
                             </a>
                         </li>
                         {% endif %}
-                        
-                        <!-- ✅ CERRAR SESIÓN -->
+
+                        <!-- ✅ SISTEMA -->
+                        <div class="sb-sidenav-menu-heading">Sistema</div>
+                        {% if user and user.role in ['admin', 'superadmin'] %}
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.url.path == '/dashboard/auditoria' %}active{% endif %}"
+                                href="/dashboard/auditoria">
+                                <i class="bi bi-shield-check"></i> Auditoría
+                            </a>
+                        </li>
+                        {% endif %}
+
+                        {% if user and user.role == 'superadmin' %}
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.url.path == '/config/pbx' %}active{% endif %}"
+                                href="/config/pbx">
+                                <i class="bi bi-server"></i> CDR Collector
+                            </a>
+                        </li>
+                        {% endif %}
                         <li class="nav-item">
                             <a class="nav-link" href="/logout">
                                 <i class="bi bi-box-arrow-right"></i> Cerrar Sesión
                             </a>
                         </li>
-                    </ul>
                 </div>
             </nav>
 
             <!-- Main content -->
             <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">
-                <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+                <div
+                    class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
                     <h1 class="h2">{% block header %}{% endblock %}</h1>
                     <div class="btn-toolbar mb-2 mb-md-0">
                         {% block header_buttons %}{% endblock %}
@@ -230,19 +207,19 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
-    
+
     <!-- ✅ SCRIPT PARA MEJORAR FUNCIONALIDAD DEL MENÚ -->
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', function () {
             // ✅ Mantener el estado del menú de administración
             const adminCollapse = document.getElementById('collapseAdmin');
             const zonasCollapse = document.getElementById('collapseZonas');
-            
+
             // Verificar si estamos en una página de administración
             const currentPath = window.location.pathname;
             const adminPaths = ['/dashboard/anexos', '/dashboard/fac-pins', '/dashboard/fac', '/dashboard/cucm'];
             const zonasPaths = ['/dashboard/zonas', '/dashboard/prefijos', '/dashboard/tarifas', '/dashboard/estadisticas_zona'];
-            
+
             // Auto-expandir menú de administración si estamos en una de sus páginas
             if (adminPaths.some(path => currentPath.startsWith(path))) {
                 if (adminCollapse && !adminCollapse.classList.contains('show')) {
@@ -254,7 +231,7 @@
                     }
                 }
             }
-            
+
             // Auto-expandir menú de zonas si estamos en una de sus páginas
             if (zonasPaths.some(path => currentPath.startsWith(path))) {
                 if (zonasCollapse && !zonasCollapse.classList.contains('show')) {
@@ -266,11 +243,11 @@
                     }
                 }
             }
-            
+
             // ✅ Mejorar la experiencia visual del menú
             const navLinks = document.querySelectorAll('#sidebar .nav-link');
             navLinks.forEach(link => {
-                link.addEventListener('click', function() {
+                link.addEventListener('click', function () {
                     // Remover active de otros enlaces del mismo nivel
                     if (!this.hasAttribute('data-bs-toggle')) {
                         const parentNav = this.closest('.nav');
@@ -279,7 +256,7 @@
                                 activeLink.classList.remove('active');
                             }
                         });
-                        
+
                         // Agregar active al enlace actual
                         this.classList.add('active');
                     }
@@ -287,15 +264,15 @@
             });
         });
     </script>
-    
+
     <!-- Carga condicional del script realtime.js -->
     {% if request.url.path == '/dashboard/monitoreo' %}
-        <script src="/static/js/monitor-system.js"></script>
-        <!-- <script src="/static/js/realtime.js"></script> -->
-    {% else %}
-        <script src="/static/js/realtime-basic.js"></script>
+    <script src="/static/js/monitor-system.js"></script>
+    <!-- <script src="/static/js/realtime.js"></script> -->
     {% endif %}
-    
+
+
     {% block extrajs %}{% endblock %}
 </body>
+
 </html>
