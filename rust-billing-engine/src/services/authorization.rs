@@ -64,7 +64,7 @@ impl AuthorizationService {
                 authorized: false,
                 reason: format!("account_{:?}", account.status).to_lowercase(),
                 uuid: call_uuid,
-                account_id: Some(account.id),
+                account_id: Some(account.id.into()),
                 account_number: Some(account.account_number),
                 reservation_id: None,
                 reserved_amount: None,
@@ -82,7 +82,7 @@ impl AuthorizationService {
                     authorized: false,
                     reason: "no_rate_found".to_string(),
                     uuid: call_uuid,
-                    account_id: Some(account.id),
+                    account_id: Some(account.id.into()),
                     account_number: Some(account.account_number),
                     reservation_id: None,
                     reserved_amount: None,
@@ -100,7 +100,7 @@ impl AuthorizationService {
         // 4. Create reservation
         let reservation_result = self.reservation_mgr
             .create_reservation(
-                account.id,
+                account.id.into(),
                 &call_uuid,
                 &req.callee,
                 rate.rate_per_minute,
@@ -113,7 +113,7 @@ impl AuthorizationService {
                 authorized: false,
                 reason: reservation_result.reason,
                 uuid: call_uuid,
-                account_id: Some(account.id),
+                account_id: Some(account.id.into()),
                 account_number: Some(account.account_number),
                 reservation_id: None,
                 reserved_amount: None,
