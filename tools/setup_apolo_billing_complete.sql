@@ -25,7 +25,10 @@ SELECT COUNT(*) as cuenta_existe FROM accounts WHERE account_number = '100001';
 -- Eliminar si existe
 DELETE FROM accounts WHERE account_number = '100001';
 
--- Crear cuenta nueva
+-- Resetear la secuencia si es necesario
+SELECT setval('accounts_id_seq', (SELECT COALESCE(MAX(id), 0) FROM accounts));
+
+-- Crear cuenta nueva (sin especificar id, se auto-genera)
 INSERT INTO accounts (
     account_number,
     account_name,
