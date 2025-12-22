@@ -930,3 +930,35 @@ async def dashboard_auditoria(request: Request, user: Usuario = Depends(get_admi
      return templates.TemplateResponse("dashboard_auditoria.html", {"request": request, "title": "Auditoría"})
 
 
+
+
+# ========================================
+# NEW UNIFIED RATE CARDS VIEW
+# ========================================
+@router.get("/dashboard/rate-cards", response_class=HTMLResponse)
+async def dashboard_rate_cards(
+    request: Request, 
+    db: Session = Depends(get_db), 
+    user: Usuario = Depends(get_admin_user)
+):
+    """
+    Unified view for managing rate_cards (replaces zones/prefixes/tarifas)
+    """
+    from app.models.billing import RateCard
+    from datetime import datetime
+    
+    # Get all active rate cards
+    rates = db.query(RateCard).filter(
+        (RateCard.effective_end.is_(None)) | 
+        (RateCard.effective_end > datetime.utcnow())
+    ).order_by(
+        RateCard.destination_prefix,
+        RateCard.priority.desc()
+    ).all()
+    
+    return templates.TemplateResponse("dashboard_rate_cards.html", {
+        "request": request,
+        "title": "Gestión de Tarifas (Rate Cards)",
+        "rates": rates,
+        "user": user
+    })

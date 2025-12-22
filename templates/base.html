@@ -122,18 +122,21 @@
 
                         <a class="nav-link collapsed" href="#" data-bs-toggle="collapse"
                             data-bs-target="#collapseRouting"
-                            aria-expanded="{% if request.url.path.startswith('/dashboard/zonas') or request.url.path.startswith('/dashboard/prefijos') or request.url.path.startswith('/dashboard/tarifas') %}true{% else %}false{% endif %}"
+                            aria-expanded="{% if request.url.path.startswith('/dashboard/zonas') or request.url.path.startswith('/dashboard/prefijos') or request.url.path.startswith('/dashboard/tarifas') or request.url.path.startswith('/dashboard/rate-cards') %}true{% else %}false{% endif %}"
                             aria-controls="collapseRouting">
                             <div class="sb-nav-link-icon"><i class="bi bi-geo-alt"></i></div>
                             Rutas & Tarifas
                             <div class="sb-sidenav-collapse-arrow"><i class="fas fa-angle-down"></i></div>
                         </a>
-                        <div class="collapse {% if request.url.path.startswith('/dashboard/zonas') or request.url.path.startswith('/dashboard/prefijos') or request.url.path.startswith('/dashboard/tarifas') %}show{% endif %}"
+                        <div class="collapse {% if request.url.path.startswith('/dashboard/zonas') or request.url.path.startswith('/dashboard/prefijos') or request.url.path.startswith('/dashboard/tarifas') or request.url.path.startswith('/dashboard/rate-cards') %}show{% endif %}"
                             id="collapseRouting" aria-labelledby="headingRouting" data-bs-parent="#sidenavAccordion">
                             <nav class="sb-sidenav-menu-nested nav">
-                                <a class="nav-link" href="/dashboard/zonas">Zonas</a>
-                                <a class="nav-link" href="/dashboard/prefijos">Prefijos</a>
-                                <a class="nav-link" href="/dashboard/tarifas">Tarifas</a>
+                                <a class="nav-link {% if request.url.path == '/dashboard/rate-cards' %}active{% endif %}" href="/dashboard/rate-cards">
+                                    <i class="bi bi-card-list me-2"></i>Rate Cards (Nuevo)
+                                </a>
+                                <a class="nav-link" href="/dashboard/zonas">Zonas (Legacy)</a>
+                                <a class="nav-link" href="/dashboard/prefijos">Prefijos (Legacy)</a>
+                                <a class="nav-link" href="/dashboard/tarifas">Tarifas (Legacy)</a>
                             </nav>
                         </div>
 
