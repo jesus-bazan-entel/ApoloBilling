@@ -28,11 +28,9 @@ DELETE FROM accounts WHERE account_number = '100001';
 -- Crear cuenta nueva
 INSERT INTO accounts (
     account_number,
-    customer_phone,
-    account_type,
+    account_name,
     balance,
-    credit_limit,
-    currency,
+    account_type,
     status,
     max_concurrent_calls,
     created_at,
@@ -40,12 +38,10 @@ INSERT INTO accounts (
 )
 VALUES (
     '100001',                    -- account_number
-    '100001',                    -- customer_phone
-    'PREPAID',                   -- account_type (ENUM)
-    10.0000,                     -- balance ($10.00)
-    0.0000,                      -- credit_limit (prepaid no tiene crédito)
-    'USD',                       -- currency
-    'ACTIVE',                    -- status (ENUM)
+    'Test Account 100001',       -- account_name
+    10.00,                       -- balance ($10.00)
+    'PREPAID',                   -- account_type
+    'ACTIVE',                    -- status
     5,                           -- max_concurrent_calls
     NOW(),                       -- created_at
     NOW()                        -- updated_at
@@ -53,10 +49,9 @@ VALUES (
 RETURNING 
     id,
     account_number,
-    account_type,
+    account_name,
     balance,
-    credit_limit,
-    currency,
+    account_type,
     status,
     max_concurrent_calls;
 
@@ -130,10 +125,9 @@ RETURNING
 SELECT 
     id,
     account_number,
-    account_type,
+    account_name,
     balance,
-    credit_limit,
-    currency,
+    account_type,
     status,
     max_concurrent_calls,
     created_at
