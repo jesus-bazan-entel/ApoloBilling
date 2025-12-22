@@ -170,7 +170,7 @@ impl AuthorizationService {
         match row {
             Some(r) => {
                 // Extrae cada campo con manejo de errores individual
-                let id: i64 = r.try_get(0).map_err(|e| {
+                let id: i32 = r.try_get(0).map_err(|e| {
                     error!("❌ Error getting id (column 0): {}", e);
                     BillingError::Internal(format!("Column 0 error: {}", e))
                 })?;
