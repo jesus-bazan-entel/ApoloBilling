@@ -1,4 +1,5 @@
 // src/services/authorization.rs
+
 use crate::models::{AuthRequest, AuthResponse, Account, AccountStatus, AccountType};
 use crate::database::DbPool;
 use crate::cache::RedisClient;
@@ -7,9 +8,9 @@ use crate::error::BillingError;
 use std::sync::Arc;
 use uuid::Uuid;
 use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive; // Added for to_f64
+use rust_decimal::prelude::ToPrimitive;
 use tracing::{info, warn, error};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, NaiveDateTime, TimeZone}; // ✅ Añadir NaiveDateTime y TimeZone
 
 pub struct AuthorizationService {
     db_pool: DbPool,
@@ -141,9 +142,7 @@ impl AuthorizationService {
         })
     }
 
-
     async fn find_account_by_ani(&self, ani: &str) -> Result<Option<Account>, BillingError> {
-        // Normalize ANI
         let normalized = ani.replace('+', "").replace(' ', "").replace('-', "");
 
         let client = self.db_pool.get().await
@@ -152,63 +151,35 @@ impl AuthorizationService {
         let row = client
             .query_opt(
                 "SELECT id, account_number, account_type::text, balance, 
-                        COALESCE(max_concurrent_calls, 5) as max_concurrent_calls,
-                        status::text, 
-                        created_at AT TIME ZONE 'UTC', updated_at AT TIME ZONE 'UTC'
+                        max_concurrent_calls, status::text, 
+                        created_at, updated_at
                 FROM accounts
-                WHERE account_number = $1 OR account_number = $2
+                WHERE (account_number = $1 OR account_number = $2)
                 AND status = 'ACTIVE'
                 LIMIT 1",
                 &[&ani, &normalized],
             )
             .await
             .map_err(|e| {
-                error!("❌ Database error finding account: {}", e);
-                BillingError::Database(e)  // ✅ CORREGIDO
+                error!("❌ Database error finding account: {:?}", e);
+                BillingError::Database(e)
             })?;
 
         match row {
             Some(r) => {
-                // Extrae cada campo con manejo de errores individual
-                let id: i32 = r.try_get(0).map_err(|e| {
-                    error!("❌ Error getting id (column 0): {}", e);
-                    BillingError::Internal(format!("Column 0 error: {}", e))
-                })?;
+                let id: i32 = r.get(0);
+                let account_number: String = r.get(1);
+                let account_type_str: String = r.get(2);
+                let balance: Decimal = r.get(3);
+                let max_concurrent_calls: i32 = r.get(4);
+                let status_str: String = r.get(5);
                 
-                let account_number: String = r.try_get(1).map_err(|e| {
-                    error!("❌ Error getting account_number (column 1): {}", e);
-                    BillingError::Internal(format!("Column 1 error: {}", e))
-                })?;
+                // ✅ SOLUCIÓN: Obtener como NaiveDateTime y convertir a DateTime<Utc>
+                let created_at_naive: NaiveDateTime = r.get(6);
+                let updated_at_naive: NaiveDateTime = r.get(7);
                 
-                let account_type_str: String = r.try_get(2).map_err(|e| {
-                    error!("❌ Error getting account_type (column 2): {}", e);
-                    BillingError::Internal(format!("Column 2 error: {}", e))
-                })?;
-                
-                let balance: Decimal = r.try_get(3).map_err(|e| {
-                    error!("❌ Error getting balance (column 3): {}", e);
-                    BillingError::Internal(format!("Column 3 error: {}", e))
-                })?;
-                
-                let max_concurrent_calls: i32 = r.try_get(4).map_err(|e| {
-                    error!("❌ Error getting max_concurrent_calls (column 4): {}", e);
-                    BillingError::Internal(format!("Column 4 error: {}", e))
-                })?;
-                
-                let status_str: String = r.try_get(5).map_err(|e| {
-                    error!("❌ Error getting status (column 5): {}", e);
-                    BillingError::Internal(format!("Column 5 error: {}", e))
-                })?;
-                
-                let created_at: DateTime<Utc> = r.try_get(6).map_err(|e| {
-                    error!("❌ Error getting created_at (column 6): {}", e);
-                    BillingError::Internal(format!("Column 6 error: {}", e))
-                })?;
-                
-                let updated_at: DateTime<Utc> = r.try_get(7).map_err(|e| {
-                    error!("❌ Error getting updated_at (column 7): {}", e);
-                    BillingError::Internal(format!("Column 7 error: {}", e))
-                })?;
+                let created_at = Utc.from_utc_datetime(&created_at_naive);
+                let updated_at = Utc.from_utc_datetime(&updated_at_naive);
 
                 info!(
                     "✅ Found account: {} (ID: {}, Type: {}, Balance: ${}, Status: {})",
@@ -220,8 +191,8 @@ impl AuthorizationService {
                     account_number,
                     account_type: AccountType::from_str(&account_type_str),
                     balance,
-                    credit_limit: Decimal::ZERO,  // No credit_limit in schema
-                    currency: "USD".to_string(),  // Default currency
+                    credit_limit: Decimal::ZERO,
+                    currency: "USD".to_string(),
                     status: AccountStatus::from_str(&status_str),
                     max_concurrent_calls: Some(max_concurrent_calls),
                     created_at,
@@ -238,7 +209,6 @@ impl AuthorizationService {
     async fn get_rate(&self, destination: &str) -> Result<Option<crate::models::RateCard>, BillingError> {
         let normalized = destination.replace('+', "");
 
-        // Try cache first
         let cache_key = format!("rate:{}", &normalized[..std::cmp::min(10, normalized.len())]);
         if let Ok(Some(cached)) = self.redis.get(&cache_key).await {
             if let Ok(rate) = serde_json::from_str(&cached) {
@@ -246,11 +216,9 @@ impl AuthorizationService {
             }
         }
 
-        // Query database with longest prefix match
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
         
-        // Generate all possible prefixes (descending length) as owned Strings
         let mut prefixes: Vec<String> = Vec::new();
         for i in (1..=normalized.len()).rev() {
             prefixes.push(normalized[..i].to_string());
@@ -260,59 +228,34 @@ impl AuthorizationService {
         let row = client
             .query_opt(
                 "SELECT id, destination_prefix, destination_name, rate_per_minute,
-                        billing_increment, COALESCE(connection_fee, 0.0) as connection_fee, 
-                        COALESCE(effective_start, NOW())::timestamptz as effective_start, 
-                        effective_end::timestamptz as effective_end, 
-                        COALESCE(priority, 10) as priority
+                        billing_increment, connection_fee, 
+                        effective_start, effective_end, priority
                 FROM rate_cards
                 WHERE destination_prefix = ANY($1)
-                AND (effective_start IS NULL OR effective_start <= NOW())
+                AND effective_start <= NOW()
                 AND (effective_end IS NULL OR effective_end >= NOW())
-                ORDER BY LENGTH(destination_prefix) DESC, COALESCE(priority, 10) DESC
+                ORDER BY LENGTH(destination_prefix) DESC, priority DESC
                 LIMIT 1",
                 &[&prefixes],
             )
-            .await?;
+            .await
+            .map_err(|e| {
+                error!("❌ Database error getting rate: {:?}", e);
+                BillingError::Database(e)
+            })?;
 
         match row {
             Some(r) => {
                 let rate = crate::models::RateCard {
-                    id: r.try_get(0).map_err(|e| {
-                        error!("❌ Error getting rate.id (column 0): {}", e);
-                        BillingError::Internal(format!("Rate column 0 error: {}", e))
-                    })?,
-                    destination_prefix: r.try_get(1).map_err(|e| {
-                        error!("❌ Error getting destination_prefix (column 1): {}", e);
-                        BillingError::Internal(format!("Rate column 1 error: {}", e))
-                    })?,
-                    destination_name: r.try_get(2).map_err(|e| {
-                        error!("❌ Error getting destination_name (column 2): {}", e);
-                        BillingError::Internal(format!("Rate column 2 error: {}", e))
-                    })?,
-                    rate_per_minute: r.try_get(3).map_err(|e| {
-                        error!("❌ Error getting rate_per_minute (column 3): {}", e);
-                        BillingError::Internal(format!("Rate column 3 error: {}", e))
-                    })?,
-                    billing_increment: r.try_get(4).map_err(|e| {
-                        error!("❌ Error getting billing_increment (column 4): {}", e);
-                        BillingError::Internal(format!("Rate column 4 error: {}", e))
-                    })?,
-                    connection_fee: r.try_get(5).map_err(|e| {
-                        error!("❌ Error getting connection_fee (column 5): {}", e);
-                        BillingError::Internal(format!("Rate column 5 error: {}", e))
-                    })?,
-                    effective_start: r.try_get(6).map_err(|e| {
-                        error!("❌ Error getting effective_start (column 6): {}", e);
-                        BillingError::Internal(format!("Rate column 6 error: {}", e))
-                    })?,
-                    effective_end: r.try_get(7).map_err(|e| {
-                        error!("❌ Error getting effective_end (column 7): {}", e);
-                        BillingError::Internal(format!("Rate column 7 error: {}", e))
-                    })?,
-                    priority: r.try_get(8).map_err(|e| {
-                        error!("❌ Error getting priority (column 8): {}", e);
-                        BillingError::Internal(format!("Rate column 8 error: {}", e))
-                    })?,
+                    id: r.get(0),
+                    destination_prefix: r.get(1),
+                    destination_name: r.get(2),
+                    rate_per_minute: r.get(3),
+                    billing_increment: r.get(4),
+                    connection_fee: r.get(5),
+                    effective_start: r.get(6),  // Ya es TIMESTAMPTZ
+                    effective_end: r.get(7),    // Ya es TIMESTAMPTZ
+                    priority: r.get(8),
                 };
 
                 info!(
@@ -320,9 +263,8 @@ impl AuthorizationService {
                     rate.destination_name, rate.rate_per_minute, rate.billing_increment, rate.priority
                 );
 
-                // Cache result
                 if let Ok(json) = serde_json::to_string(&rate) {
-                    let _ = self.redis.set(&cache_key, &json, 300).await; // 5 min TTL
+                    let _ = self.redis.set(&cache_key, &json, 300).await;
                 }
 
                 Ok(Some(rate))
@@ -330,5 +272,4 @@ impl AuthorizationService {
             None => Ok(None),
         }
     }
-
 }
