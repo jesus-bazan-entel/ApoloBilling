@@ -83,17 +83,33 @@ ACCOUNT_EXISTS=$(sudo -u postgres psql -d apolo_billing -tAc \
 
 if [ "$ACCOUNT_EXISTS" -eq "0" ]; then
     log_warning "Cuenta 100001 no existe, creándola..."
-    sudo -u postgres psql -d apolo_billing << 'EOF'
+    
+    # Verificar si la tabla tiene la columna account_name
+    HAS_ACCOUNT_NAME=$(sudo -u postgres psql -d apolo_billing -tAc \
+        "SELECT COUNT(*) FROM information_schema.columns 
+         WHERE table_name='accounts' AND column_name='account_name';")
+    
+    if [ "$HAS_ACCOUNT_NAME" -eq "1" ]; then
+        # Esquema nuevo con account_name
+        sudo -u postgres psql -d apolo_billing << 'EOF'
 INSERT INTO accounts (account_number, account_name, balance, account_type, status, max_concurrent_calls)
 VALUES ('100001', 'Cuenta Demo Test', 10.00, 'PREPAID', 'ACTIVE', 5)
 ON CONFLICT (account_number) DO NOTHING;
 EOF
+    else
+        # Esquema legacy sin account_name
+        sudo -u postgres psql -d apolo_billing << 'EOF'
+INSERT INTO accounts (account_number, balance, account_type, status, max_concurrent_calls)
+VALUES ('100001', 10.00, 'PREPAID', 'ACTIVE', 5)
+ON CONFLICT (account_number) DO NOTHING;
+EOF
+    fi
     log_success "Cuenta 100001 creada con balance $10.00"
 else
     # Actualizar balance para pruebas
     sudo -u postgres psql -d apolo_billing << 'EOF'
 UPDATE accounts 
-SET balance = 10.00, status = 'ACTIVE' 
+SET balance = 10.00
 WHERE account_number = '100001';
 EOF
     log_success "Cuenta 100001 actualizada (balance: $10.00)"
@@ -101,16 +117,39 @@ fi
 
 # Verificar que existen rate cards
 log_info "Verificando rate cards..."
+
+# Primero verificar qué columna de prefijo tiene la tabla
+HAS_DEST_PREFIX=$(sudo -u postgres psql -d apolo_billing -tAc \
+    "SELECT COUNT(*) FROM information_schema.columns 
+     WHERE table_name='rate_cards' AND column_name='destination_prefix';")
+
+if [ "$HAS_DEST_PREFIX" -eq "1" ]; then
+    PREFIX_COLUMN="destination_prefix"
+else
+    PREFIX_COLUMN="prefix"
+fi
+
 RATECARD_COUNT=$(sudo -u postgres psql -d apolo_billing -tAc \
-    "SELECT COUNT(*) FROM rate_cards WHERE destination_prefix = '519';")
+    "SELECT COUNT(*) FROM rate_cards WHERE $PREFIX_COLUMN = '519';")
 
 if [ "$RATECARD_COUNT" -eq "0" ]; then
     log_warning "Rate card para Perú Móvil (519) no existe, creándola..."
-    sudo -u postgres psql -d apolo_billing << 'EOF'
+    
+    if [ "$HAS_DEST_PREFIX" -eq "1" ]; then
+        # Esquema nuevo
+        sudo -u postgres psql -d apolo_billing << 'EOF'
 INSERT INTO rate_cards (destination_prefix, destination_name, rate_per_minute, billing_increment, priority)
 VALUES ('519', 'Perú Móvil', 0.0180, 6, 150)
 ON CONFLICT DO NOTHING;
 EOF
+    else
+        # Esquema legacy
+        sudo -u postgres psql -d apolo_billing << 'EOF'
+INSERT INTO rate_cards (prefix, destination, rate, increment, priority)
+VALUES ('519', 'Perú Móvil', 0.0180, 6, 150)
+ON CONFLICT DO NOTHING;
+EOF
+    fi
     log_success "Rate card creada: 519 (Perú Móvil) - $0.0180/min"
 else
     log_success "Rate cards existen"
@@ -118,8 +157,19 @@ fi
 
 echo ""
 log_info "Estado de la cuenta 100001:"
-sudo -u postgres psql -d apolo_billing -c \
-    "SELECT account_number, account_name, balance, account_type, status FROM accounts WHERE account_number = '100001';"
+
+# Verificar columnas disponibles
+HAS_ACCOUNT_NAME=$(sudo -u postgres psql -d apolo_billing -tAc \
+    "SELECT COUNT(*) FROM information_schema.columns 
+     WHERE table_name='accounts' AND column_name='account_name';")
+
+if [ "$HAS_ACCOUNT_NAME" -eq "1" ]; then
+    sudo -u postgres psql -d apolo_billing -c \
+        "SELECT account_number, account_name, balance, account_type, status FROM accounts WHERE account_number = '100001';"
+else
+    sudo -u postgres psql -d apolo_billing -c \
+        "SELECT account_number, balance, account_type, status FROM accounts WHERE account_number = '100001';"
+fi
 
 echo ""
 
