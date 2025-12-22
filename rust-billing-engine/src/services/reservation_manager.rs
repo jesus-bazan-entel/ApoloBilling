@@ -102,6 +102,9 @@ impl ReservationManager {
         // ✅ SOLUCIÓN: Convertir DateTime<Utc> a NaiveDateTime
         let expires_at_naive = expires_at.naive_utc();
         
+        // Convert i64 to i32 for account_id column
+        let account_id_i32 = account_id as i32;
+        
         client
             .execute(
                 "INSERT INTO balance_reservations 
@@ -111,7 +114,7 @@ impl ReservationManager {
                 VALUES ($1, $2, $3, $4, 0, 0, $5, $6, $7, $8, $9, $10, 'system')",
                 &[
                     &reservation_id,
-                    &account_id,
+                    &account_id_i32,
                     &call_uuid,
                     &total_reservation,
                     &"active",
@@ -242,11 +245,13 @@ impl ReservationManager {
     }
 
     async fn get_available_balance(&self, account_id: i64) -> Result<Decimal, BillingError> {
+        let account_id_i32 = account_id as i32;
+        
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
         
         let balance_row = client
-            .query_one("SELECT balance FROM accounts WHERE id = $1", &[&account_id])
+            .query_one("SELECT balance FROM accounts WHERE id = $1", &[&account_id_i32])
             .await?;
         let balance: Decimal = balance_row.get(0);
 
@@ -255,7 +260,7 @@ impl ReservationManager {
                 "SELECT COALESCE(SUM(reserved_amount - consumed_amount), 0)
                  FROM balance_reservations
                  WHERE account_id = $1 AND status = 'active'",
-                &[&account_id],
+                &[&account_id_i32],
             )
             .await?;
         let total_reserved: Decimal = reserved_row.get(0);
@@ -284,6 +289,7 @@ impl ReservationManager {
         account_id: i64,
         call_uuid: &str,
     ) -> Result<(), BillingError> {
+        let account_id_i32 = account_id as i32;
         let mut remaining = actual_cost;
 
         // Consume FIFO
@@ -320,7 +326,7 @@ impl ReservationManager {
         client
             .execute(
                 "UPDATE accounts SET balance = balance - $1, updated_at = NOW() WHERE id = $2",
-                &[&actual_cost, &account_id],
+                &[&actual_cost, &account_id_i32],
             )
             .await?;
 
@@ -332,7 +338,7 @@ impl ReservationManager {
                  SELECT $1, $2, balance + $2, balance, 'reservation_consume', $3, $4
                  FROM accounts WHERE id = $1",
                 &[
-                    &account_id,
+                    &account_id_i32,
                     &(-actual_cost),
                     &format!("Consumed reservation for call {}", call_uuid),
                     &call_uuid,
@@ -352,6 +358,8 @@ impl ReservationManager {
         account_id: i64,
         call_uuid: &str,
     ) -> Result<(), BillingError> {
+        let account_id_i32 = account_id as i32;
+        
         // Mark all as fully consumed
         for row in rows {
             let reservation_id: Uuid = row.get(0);
@@ -373,7 +381,7 @@ impl ReservationManager {
         client
             .execute(
                 "UPDATE accounts SET balance = balance - $1, updated_at = NOW() WHERE id = $2",
-                &[&actual_cost, &account_id],
+                &[&actual_cost, &account_id_i32],
             )
             .await?;
 
@@ -387,7 +395,7 @@ impl ReservationManager {
                  SELECT $1, $2, balance + $2, balance, 'reservation_consume', $3, $4
                  FROM accounts WHERE id = $1",
                 &[
-                    &account_id,
+                    &account_id_i32,
                     &(-actual_cost),
                     &format!("DEFICIT: Consumed ${} reserved + ${} deficit for call {}", total_reserved, deficit, call_uuid),
                     &call_uuid,
@@ -487,6 +495,9 @@ impl ReservationManager {
             .await?;
         let destination_prefix: String = dest_row.get(0);
 
+        // Convert i64 to i32 for account_id column
+        let account_id_i32 = account_id as i32;
+        
         client
             .execute(
                 "INSERT INTO balance_reservations 
@@ -496,7 +507,7 @@ impl ReservationManager {
                 VALUES ($1, $2, $3, $4, 0, 0, $5, $6, $7, $8, $9, $10, 'system_extension')",
                 &[
                     &extension_id,
-                    &account_id,
+                    &account_id_i32,
                     &call_uuid,
                     &extension_amount,
                     &"active",
