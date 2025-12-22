@@ -250,10 +250,10 @@ impl AuthorizationService {
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
         
-        // Generate all possible prefixes (descending length)
-        let mut prefixes = Vec::new();
+        // Generate all possible prefixes (descending length) as owned Strings
+        let mut prefixes: Vec<String> = Vec::new();
         for i in (1..=normalized.len()).rev() {
-            prefixes.push(&normalized[..i]);
+            prefixes.push(normalized[..i].to_string());
         }
         info!("🔎 Generated prefixes for {}: {:?}", normalized, prefixes);
 
@@ -266,7 +266,7 @@ impl AuthorizationService {
                         priority
                 FROM rate_cards
                 WHERE destination_prefix = ANY($1)
-                AND effective_start <= NOW()
+                AND (effective_start IS NULL OR effective_start <= NOW())
                 AND (effective_end IS NULL OR effective_end >= NOW())
                 ORDER BY LENGTH(destination_prefix) DESC, priority DESC
                 LIMIT 1",

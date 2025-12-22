@@ -17,7 +17,7 @@ SELECT COUNT(*) as total_rate_cards FROM rate_cards;
 
 \echo ''
 \echo '📋 Rate cards actuales (primeras 5):'
-SELECT id, destination_prefix, destination_name, rate_per_minute, billing_increment
+SELECT id, destination_prefix, destination_name, rate_per_minute, billing_increment, connection_fee, effective_start, priority
 FROM rate_cards
 ORDER BY destination_prefix
 LIMIT 5;
@@ -37,16 +37,24 @@ INSERT INTO rate_cards (
     destination_prefix,
     destination_name,
     rate_per_minute,
-    billing_increment
+    billing_increment,
+    connection_fee,
+    effective_start,
+    effective_end,
+    priority
 )
 VALUES
-    ('51', 'Peru - Mobile/Fixed', 0.018, 6)
+    ('51', 'Peru - Mobile/Fixed', 0.018, 6, 0.00, NOW(), NULL, 10)
 RETURNING
     id,
     destination_prefix,
     destination_name,
     rate_per_minute,
-    billing_increment;
+    billing_increment,
+    connection_fee,
+    effective_start,
+    effective_end,
+    priority;
 
 \echo ''
 \echo '─────────────────────────────────────────────────────────────────────────────'
@@ -54,7 +62,7 @@ RETURNING
 -- Paso 3: Verificar todas las rate_cards
 \echo ''
 \echo '📊 Paso 3: Todas las rate cards (después de insertar):'
-SELECT id, destination_prefix, destination_name, rate_per_minute, billing_increment
+SELECT id, destination_prefix, destination_name, rate_per_minute, billing_increment, connection_fee, effective_start, priority
 FROM rate_cards
 ORDER BY destination_prefix;
 
