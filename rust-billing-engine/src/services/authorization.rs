@@ -132,7 +132,7 @@ impl AuthorizationService {
             authorized: true,
             reason: "authorized".to_string(),
             uuid: call_uuid,
-            account_id: Some(account.id),
+            account_id: Some(account.id.into()),
             account_number: Some(account.account_number.clone()),
             reservation_id: Some(reservation_result.reservation_id),
             reserved_amount: Some(reservation_result.reserved_amount),
