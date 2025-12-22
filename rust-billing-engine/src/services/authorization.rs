@@ -151,9 +151,9 @@ impl AuthorizationService {
         
         let row = client
             .query_opt(
-                "SELECT id, account_number, account_type, balance, 
+                "SELECT id, account_number, account_type::text, balance, 
                         COALESCE(max_concurrent_calls, 5) as max_concurrent_calls,
-                        status, 
+                        status::text, 
                         created_at AT TIME ZONE 'UTC', updated_at AT TIME ZONE 'UTC'
                 FROM accounts
                 WHERE account_number = $1 OR account_number = $2
