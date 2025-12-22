@@ -7,6 +7,5 @@ pub mod server;
 
 pub use client::FreeSwitchCluster;
 pub use connection::EslConnection;
-pub use event::EslEvent;
 pub use event_handler::EventHandler;
 pub use server::EslServer;

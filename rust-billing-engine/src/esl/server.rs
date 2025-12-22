@@ -180,6 +180,10 @@ impl EslServer {
 
         let mut event_headers = HashMap::new();
 
+        // Always include Event-Name
+        event_headers.insert("Event-Name".to_string(), event_name.to_string());
+
+        // Parse all headers
         for header in headers {
             if let Some(pos) = header.find(':') {
                 let key = header[..pos].trim().to_string();
@@ -188,26 +192,9 @@ impl EslServer {
             }
         }
 
-        match event_name {
-            "CHANNEL_CREATE" => EslEvent::ChannelCreate {
-                uuid: event_headers.get("Unique-ID").cloned().unwrap_or_default(),
-                caller_number: event_headers.get("Caller-Caller-ID-Number").cloned().unwrap_or_default(),
-                called_number: event_headers.get("Caller-Destination-Number").cloned().unwrap_or_default(),
-                account_code: event_headers.get("variable_account_code").cloned().unwrap_or_default(),
-            },
-            "CHANNEL_ANSWER" => EslEvent::ChannelAnswer {
-                uuid: event_headers.get("Unique-ID").cloned().unwrap_or_default(),
-            },
-            "CHANNEL_HANGUP_COMPLETE" => EslEvent::ChannelHangupComplete {
-                uuid: event_headers.get("Unique-ID").cloned().unwrap_or_default(),
-                hangup_cause: event_headers.get("Hangup-Cause").cloned().unwrap_or_default(),
-                start_time: event_headers.get("variable_start_epoch").cloned().unwrap_or_default(),
-                answer_time: event_headers.get("variable_answer_epoch").cloned(),
-                end_time: event_headers.get("variable_end_epoch").cloned().unwrap_or_default(),
-            },
-            _ => EslEvent::Unknown {
-                event_name: event_name.to_string(),
-            },
+        EslEvent {
+            headers: event_headers,
+            body: None,
         }
     }
 }
