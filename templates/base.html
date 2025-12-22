@@ -120,25 +120,14 @@
                             </nav>
                         </div>
 
-                        <a class="nav-link collapsed" href="#" data-bs-toggle="collapse"
-                            data-bs-target="#collapseRouting"
-                            aria-expanded="{% if request.url.path.startswith('/dashboard/zonas') or request.url.path.startswith('/dashboard/prefijos') or request.url.path.startswith('/dashboard/tarifas') or request.url.path.startswith('/dashboard/rate-cards') %}true{% else %}false{% endif %}"
-                            aria-controls="collapseRouting">
-                            <div class="sb-nav-link-icon"><i class="bi bi-geo-alt"></i></div>
-                            Rutas & Tarifas
-                            <div class="sb-sidenav-collapse-arrow"><i class="fas fa-angle-down"></i></div>
-                        </a>
-                        <div class="collapse {% if request.url.path.startswith('/dashboard/zonas') or request.url.path.startswith('/dashboard/prefijos') or request.url.path.startswith('/dashboard/tarifas') or request.url.path.startswith('/dashboard/rate-cards') %}show{% endif %}"
-                            id="collapseRouting" aria-labelledby="headingRouting" data-bs-parent="#sidenavAccordion">
-                            <nav class="sb-sidenav-menu-nested nav">
-                                <a class="nav-link {% if request.url.path == '/dashboard/rate-cards' %}active{% endif %}" href="/dashboard/rate-cards">
-                                    <i class="bi bi-card-list me-2"></i>Rate Cards (Nuevo)
-                                </a>
-                                <a class="nav-link" href="/dashboard/zonas">Zonas (Legacy)</a>
-                                <a class="nav-link" href="/dashboard/prefijos">Prefijos (Legacy)</a>
-                                <a class="nav-link" href="/dashboard/tarifas">Tarifas (Legacy)</a>
-                            </nav>
-                        </div>
+                        <!-- ✅ GESTIÓN DE TARIFAS (Rate Cards) -->
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.url.path == '/dashboard/rate-cards' %}active{% endif %}" 
+                               href="/dashboard/rate-cards">
+                                <div class="sb-nav-link-icon"><i class="bi bi-card-list"></i></div>
+                                Gestión de Tarifas
+                            </a>
+                        </li>
 
                         <!-- ✅ FACTURACIÓN -->
                         <div class="sb-sidenav-menu-heading">Facturación</div>
@@ -216,12 +205,10 @@
         document.addEventListener('DOMContentLoaded', function () {
             // ✅ Mantener el estado del menú de administración
             const adminCollapse = document.getElementById('collapseAdmin');
-            const zonasCollapse = document.getElementById('collapseZonas');
 
             // Verificar si estamos en una página de administración
             const currentPath = window.location.pathname;
             const adminPaths = ['/dashboard/anexos', '/dashboard/fac-pins', '/dashboard/fac', '/dashboard/cucm'];
-            const zonasPaths = ['/dashboard/zonas', '/dashboard/prefijos', '/dashboard/tarifas', '/dashboard/estadisticas_zona'];
 
             // Auto-expandir menú de administración si estamos en una de sus páginas
             if (adminPaths.some(path => currentPath.startsWith(path))) {
@@ -231,18 +218,6 @@
                     if (adminToggle) {
                         adminToggle.setAttribute('aria-expanded', 'true');
                         adminToggle.classList.remove('collapsed');
-                    }
-                }
-            }
-
-            // Auto-expandir menú de zonas si estamos en una de sus páginas
-            if (zonasPaths.some(path => currentPath.startsWith(path))) {
-                if (zonasCollapse && !zonasCollapse.classList.contains('show')) {
-                    zonasCollapse.classList.add('show');
-                    const zonasToggle = document.querySelector('[data-bs-target="#collapseZonas"]');
-                    if (zonasToggle) {
-                        zonasToggle.setAttribute('aria-expanded', 'true');
-                        zonasToggle.classList.remove('collapsed');
                     }
                 }
             }
