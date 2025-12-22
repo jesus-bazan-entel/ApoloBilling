@@ -71,7 +71,7 @@ SELECT COUNT(*) as total_rate_cards FROM rate_cards;
 
 \echo ''
 \echo '📋 Rate cards actuales (primeras 5):'
-SELECT id, destination_prefix, destination_name, rate_per_minute, billing_increment, 
+SELECT id, rate_name, destination_prefix, destination_name, rate_per_minute, billing_increment, 
        connection_fee, priority
 FROM rate_cards
 ORDER BY destination_prefix
@@ -85,6 +85,7 @@ DELETE FROM rate_cards WHERE destination_prefix = '51';
 
 -- Insertar nueva tarifa
 INSERT INTO rate_cards (
+    rate_name,
     destination_prefix,
     destination_name,
     rate_per_minute,
@@ -95,9 +96,10 @@ INSERT INTO rate_cards (
     priority
 )
 VALUES
-    ('51', 'Perú Móvil', 0.018, 6, 0.00, NOW(), NULL, 150)
+    ('PERU_MOBILE', '51', 'Perú Móvil', 0.018, 6, 0.00, NOW(), NULL, 150)
 RETURNING
     id,
+    rate_name,
     destination_prefix,
     destination_name,
     rate_per_minute,
@@ -138,6 +140,7 @@ WHERE account_number = '100001';
 \echo '✅ RATE CARD PERÚ (PREFIX 51):'
 SELECT 
     id,
+    rate_name,
     destination_prefix,
     destination_name,
     rate_per_minute,
@@ -153,7 +156,8 @@ WHERE destination_prefix = '51';
 \echo ''
 \echo '📊 Todas las rate cards disponibles:'
 SELECT 
-    id, 
+    id,
+    rate_name,
     destination_prefix, 
     destination_name, 
     rate_per_minute, 
