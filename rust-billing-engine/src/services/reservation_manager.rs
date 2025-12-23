@@ -121,7 +121,7 @@ impl ReservationManager {
                 &[
                     &reservation_id,
                     &account_id_i32,
-                    &call_uuid,
+                    call_uuid,
                     &total_reservation_f64,
                     &"active",
                     &"initial",
