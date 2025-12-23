@@ -64,7 +64,7 @@ impl CdrGenerator {
             })?;
 
         let (account_id, rate_per_minute, cost) = if let Some(row) = reservation_row {
-            let account_id: i64 = row.try_get(0).map_err(|e| {
+            let account_id: i32 = row.try_get(0).map_err(|e| {
                 error!("❌ Error getting account_id: {}", e);
                 BillingError::Internal(format!("Column 0 error: {}", e))
             })?;
