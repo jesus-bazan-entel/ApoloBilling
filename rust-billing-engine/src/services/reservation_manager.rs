@@ -97,7 +97,7 @@ impl ReservationManager {
         let expires_at_naive = expires_at.naive_utc();
         
         let account_id_i32 = account_id as i32;
-        let dest_prefix_str = String::from(&destination[..std::cmp::min(10, destination.len())]);
+        let dest_prefix = &destination[..std::cmp::min(10, destination.len())];
         let call_uuid_str = call_uuid.to_string();
 
         let client = self.db_pool.get().await
@@ -106,6 +106,13 @@ impl ReservationManager {
         // ✅ Convertir Decimal a f64 para evitar problemas de serialización
         let reserved_f64 = total_reservation.to_f64().unwrap_or(0.0);
         let rate_f64 = rate_per_minute.to_f64().unwrap_or(0.0);
+
+        info!("🔍 Inserting reservation:");
+        info!("   reservation_id: {}", reservation_id);
+        info!("   account_id: {}", account_id_i32);
+        info!("   call_uuid: {}", call_uuid);
+        info!("   reserved: {}", reserved_f64);
+        info!("   rate: {}", rate_f64);
         
         client
             .execute(
@@ -118,13 +125,13 @@ impl ReservationManager {
                 &[
                     &reservation_id,
                     &account_id_i32,
-                    &call_uuid_str,
+                    &call_uuid,
                     &reserved_f64,
                     &0.0_f64,
                     &0.0_f64,
                     &"active",
                     &"initial",
-                    &dest_prefix_str,
+                    &dest_prefix,
                     &rate_f64,
                     &INITIAL_RESERVATION_MINUTES,
                     &expires_at_naive,
