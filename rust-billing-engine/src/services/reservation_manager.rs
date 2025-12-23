@@ -95,39 +95,40 @@ impl ReservationManager {
         // Create reservation in database
         let reservation_id = Uuid::new_v4();
         let expires_at = Utc::now() + Duration::seconds(RESERVATION_TTL);
+        let expires_at_naive = expires_at.naive_utc();
+        
+        // Convert account_id to i32
+        let account_id_i32 = account_id as i32;
+        
+        // Prepare string references
+        let dest_prefix_str = String::from(&destination[..std::cmp::min(10, destination.len())]);
+        let call_uuid_str = call_uuid.to_string();
 
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
         
-        // ✅ SOLUCIÓN: Convertir DateTime<Utc> a NaiveDateTime
-        let expires_at_naive = expires_at.naive_utc();
-        
-        // Convert i64 to i32 for account_id column
-        let account_id_i32 = account_id as i32;
-
-        let account_id_i32 = account_id as i32;
-        let expires_at_naive = expires_at.naive_utc();
-        let dest_prefix_str = String::from(&destination[..std::cmp::min(10, destination.len())]); // Crear string temporal
-        let call_uuid_str = call_uuid.to_string();
-
+        // ✅ SOLUCIÓN: Usar Decimal::ZERO en lugar de 0.0
         client
             .execute(
                 "INSERT INTO balance_reservations 
                 (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
                 status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
                 expires_at, created_by)
-                VALUES ($1, $2, $3, $4, 0.0, 0.0, $5, $6, $7, $8, $9, $10, 'system')",
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
                 &[
-                    &reservation_id,
-                    &account_id_i32,
-                    &call_uuid_str,
-                    &total_reservation,
-                    &"active",
-                    &"initial",
-                    &dest_prefix_str,
-                    &rate_per_minute,
-                    &INITIAL_RESERVATION_MINUTES,
-                    &expires_at_naive,  // ✅ Usar naive_utc() en lugar de expires_at directamente
+                    &reservation_id,              // $1: UUID
+                    &account_id_i32,              // $2: INTEGER
+                    &call_uuid_str,               // $3: VARCHAR
+                    &total_reservation,           // $4: NUMERIC(12,4)
+                    &Decimal::ZERO,               // $5: NUMERIC(12,4) - consumed_amount ✅
+                    &Decimal::ZERO,               // $6: NUMERIC(12,4) - released_amount ✅
+                    &"active",                    // $7: reservation_status (ENUM as text)
+                    &"initial",                   // $8: reservation_type (ENUM as text)
+                    &dest_prefix_str,             // $9: VARCHAR(20)
+                    &rate_per_minute,             // $10: NUMERIC(10,6)
+                    &INITIAL_RESERVATION_MINUTES, // $11: INTEGER
+                    &expires_at_naive,            // $12: TIMESTAMP
+                    &"system",                    // $13: VARCHAR(100)
                 ],
             )
             .await
@@ -424,7 +425,6 @@ impl ReservationManager {
     ) -> Result<ExtensionResult, BillingError> {
         info!("🔄 Attempting to extend reservation for call: {}", call_uuid);
 
-        // Get existing active reservations
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
         
@@ -461,7 +461,6 @@ impl ReservationManager {
         let buffer = base_amount * Decimal::from(RESERVATION_BUFFER_PERCENT) / Decimal::from(100);
         let mut extension_amount = base_amount + buffer;
 
-        // Apply limits
         extension_amount = extension_amount.max(Decimal::from_f64(MIN_RESERVATION_AMOUNT).unwrap());
         extension_amount = extension_amount.min(Decimal::from_f64(MAX_RESERVATION_AMOUNT).unwrap());
 
@@ -470,7 +469,6 @@ impl ReservationManager {
             base_amount, buffer, RESERVATION_BUFFER_PERCENT, extension_amount
         );
 
-        // Check available balance
         let available_balance = self.get_available_balance(account_id).await?;
 
         if available_balance < extension_amount {
@@ -486,12 +484,10 @@ impl ReservationManager {
             });
         }
 
-        // Create new extension reservation
         let extension_id = Uuid::new_v4();
         let expires_at = Utc::now() + Duration::seconds(RESERVATION_TTL);
         let expires_at_naive = expires_at.naive_utc();
 
-        // Get destination prefix from original reservation
         let dest_row = client
             .query_one(
                 "SELECT destination_prefix FROM balance_reservations WHERE id = $1",
@@ -500,27 +496,31 @@ impl ReservationManager {
             .await?;
         let destination_prefix: String = dest_row.get(0);
 
-        // Convert i64 to i32 for account_id column
         let account_id_i32 = account_id as i32;
+        let call_uuid_str = call_uuid.to_string();
         
+        // ✅ SOLUCIÓN: Usar Decimal::ZERO aquí también
         client
             .execute(
                 "INSERT INTO balance_reservations 
                 (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
                 status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
                 expires_at, created_by)
-                VALUES ($1, $2, $3, $4, 0, 0, $5, $6, $7, $8, $9, $10, 'system_extension')",
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
                 &[
                     &extension_id,
                     &account_id_i32,
-                    &call_uuid,
+                    &call_uuid_str,
                     &extension_amount,
+                    &Decimal::ZERO,        // ✅ consumed_amount
+                    &Decimal::ZERO,        // ✅ released_amount
                     &"active",
                     &"extension",
                     &destination_prefix,
                     &rate_per_minute,
                     &additional_minutes,
                     &expires_at_naive,
+                    &"system_extension",
                 ],
             )
             .await
@@ -529,7 +529,6 @@ impl ReservationManager {
                 BillingError::Database(e)
             })?;
 
-        // Update Redis cache
         let cache_data = serde_json::json!({
             "account_id": account_id,
             "call_uuid": call_uuid,
@@ -548,13 +547,11 @@ impl ReservationManager {
             .await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
 
-        // Add to active reservations set
         self.redis
             .sadd(&format!("active_reservations:{}", account_id), &extension_id.to_string())
             .await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
 
-        // Calculate new max duration
         let total_reserved = current_reserved + extension_amount - consumed;
         let new_max_duration_seconds = ((total_reserved / rate_per_minute) * Decimal::from(60))
             .to_i32()
@@ -572,4 +569,5 @@ impl ReservationManager {
             new_max_duration_seconds,
         })
     }
+}
 }
