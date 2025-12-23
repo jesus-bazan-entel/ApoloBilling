@@ -104,6 +104,12 @@ impl ReservationManager {
         
         // Convert i64 to i32 for account_id column
         let account_id_i32 = account_id as i32;
+
+        let total_reservation_f64 = total_reservation.to_f64().unwrap_or(0.0);
+        let rate_per_minute_f64 = rate_per_minute.to_f64().unwrap_or(0.0);
+        let account_id_i32 = account_id as i32;
+        let expires_at_naive = expires_at.naive_utc();
+        let dest_prefix_str = String::from(&destination[..std::cmp::min(10, destination.len())]); // Crear string temporal
         
         client
             .execute(
@@ -116,11 +122,11 @@ impl ReservationManager {
                     &reservation_id,
                     &account_id_i32,
                     &call_uuid,
-                    &total_reservation,
+                    &total_reservation_f64,
                     &"active",
                     &"initial",
-                    &String::from(&destination[..std::cmp::min(10, destination.len())]),
-                    &rate_per_minute,
+                    &dest_prefix_str,
+                    &rate_per_minute_f64,
                     &INITIAL_RESERVATION_MINUTES,
                     &expires_at_naive,  // ✅ Usar naive_utc() en lugar de expires_at directamente
                 ],
