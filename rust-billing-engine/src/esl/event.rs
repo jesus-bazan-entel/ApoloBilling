@@ -111,15 +111,24 @@ impl EslEvent {
     //                .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
     //        })
     //}
+    /// Convert timestamp header to DateTime<Utc>
+    /// Handles both microsecond timestamps (Event-Date-Timestamp) and second timestamps (variable_*_epoch)
     pub fn timestamp_to_datetime(&self, header_name: &str) -> Option<DateTime<Utc>> {
-        let micros = self.headers.get(header_name)?.parse::<i64>().ok()?;
+        let timestamp = self.headers.get(header_name)?.parse::<i64>().ok()?;
     
         // FreeSWITCH sometimes sends 0 → invalid
-        if micros <= 0 {
+        if timestamp <= 0 {
             return None;
         }
     
-        DateTime::<Utc>::from_timestamp_micros(micros)
+        // Determine if timestamp is in seconds or microseconds based on header name
+        if header_name.starts_with("variable_") && header_name.ends_with("_epoch") {
+            // variable_*_epoch headers are in SECONDS
+            DateTime::<Utc>::from_timestamp(timestamp, 0)
+        } else {
+            // Event-Date-Timestamp and other headers are in MICROSECONDS
+            DateTime::<Utc>::from_timestamp_micros(timestamp)
+        }
     }
     
     /// Get call start time (CHANNEL_CREATE epoch)
