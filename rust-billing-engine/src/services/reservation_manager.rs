@@ -114,7 +114,7 @@ impl ReservationManager {
                 (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
                 status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
                 expires_at, created_by)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                VALUES ($1, $2, $3, $4, $5, $6, $7::reservation_status, $8::reservation_type, $9, $10, $11, $12, $13)",
                 &[
                     &reservation_id,              // $1: UUID
                     &account_id_i32,              // $2: INTEGER
@@ -506,7 +506,7 @@ impl ReservationManager {
                 (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
                 status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
                 expires_at, created_by)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                VALUES ($1, $2, $3, $4, $5, $6, $7::reservation_status, $8::reservation_type, $9, $10, $11, $12, $13)",
                 &[
                     &extension_id,
                     &account_id_i32,
