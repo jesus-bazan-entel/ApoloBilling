@@ -207,7 +207,9 @@ impl ReservationManager {
         }
 
         let first_row = &rows[0];
-        let account_id: i64 = first_row.get(1);
+        let account_id_i32: i32 = first_row.get(1);
+        let account_id: i64 = account_id_i32 as i64;
+
         let mut total_reserved = Decimal::ZERO;
         
         for row in &rows {
