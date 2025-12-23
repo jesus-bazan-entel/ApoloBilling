@@ -109,7 +109,7 @@ impl ReservationManager {
             .map_err(|e| BillingError::Internal(e.to_string()))?;
 
         // ✅ Crear valores Decimal explícitos con from_str
-        let zero_amount = Decimal::from_str("0.0000").unwrap();
+        let zero_amount = Decimal::from("0.0000").unwrap();
         
         info!("🔍 DEBUG - About to insert reservation:");
         info!("   reservation_id: {}", reservation_id);
