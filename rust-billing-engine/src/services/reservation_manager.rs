@@ -177,7 +177,7 @@ impl ReservationManager {
             reservation_id,
             reserved_amount: reserved_f64,
             max_duration_seconds,
-        }
+        })
     }
 
     pub async fn consume_reservation(
