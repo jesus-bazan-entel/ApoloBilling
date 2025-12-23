@@ -4,7 +4,7 @@ use crate::database::DbPool;
 use crate::cache::RedisClient;
 use crate::error::BillingError;
 use rust_decimal::Decimal;
-use rust_decimal::prelude::{ToPrimitive, FromPrimitive}; // Added for to_f64, from_f64, to_i32
+use rust_decimal::prelude::{ToPrimitive, FromPrimitive};
 use uuid::Uuid;
 use chrono::{Utc, Duration, NaiveDateTime}; 
 use tracing::{info, warn, error};
@@ -16,7 +16,6 @@ const MIN_RESERVATION_AMOUNT: f64 = 0.30;
 const MAX_RESERVATION_AMOUNT: f64 = 30.00;
 const RESERVATION_TTL: i64 = 2700; // 45 minutes
 const MAX_CONCURRENT_CALLS: i32 = 5;
-// const TOTAL_RESERVED_LIMIT_PERCENT: i32 = 85; // Unused warning
 
 pub struct ReservationResult {
     pub success: bool,
@@ -97,34 +96,16 @@ impl ReservationManager {
         let expires_at = Utc::now() + Duration::seconds(RESERVATION_TTL);
         let expires_at_naive = expires_at.naive_utc();
         
-        // Convert account_id to i32
         let account_id_i32 = account_id as i32;
-        
-        // Prepare string references
         let dest_prefix_str = String::from(&destination[..std::cmp::min(10, destination.len())]);
         let call_uuid_str = call_uuid.to_string();
 
-        
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
-
-        let consumed_amount = Decimal::new(0, 4);
-        let released_amount = Decimal::new(0, 4);
         
-        info!("🔍 DEBUG - Inserting reservation with parameters:");
-        info!("   $1 reservation_id: {}", reservation_id);
-        info!("   $2 account_id: {}", account_id_i32);
-        info!("   $3 call_uuid: {}", call_uuid_str);
-        info!("   $4 reserved_amount: {}", total_reservation);
-        info!("   $5 consumed_amount: {}", consumed_amount);
-        info!("   $6 released_amount: {}", released_amount);
-        info!("   $7 status: active");
-        info!("   $8 reservation_type: initial");
-        info!("   $9 dest_prefix: {}", dest_prefix_str);
-        info!("   $10 rate_per_minute: {}", rate_per_minute);
-        info!("   $11 reserved_minutes: {}", INITIAL_RESERVATION_MINUTES);
-        info!("   $12 expires_at: {}", expires_at_naive);
-        info!("   $13 created_by: system");
+        // ✅ Convertir Decimal a f64 para evitar problemas de serialización
+        let reserved_f64 = total_reservation.to_f64().unwrap_or(0.0);
+        let rate_f64 = rate_per_minute.to_f64().unwrap_or(0.0);
         
         client
             .execute(
@@ -132,47 +113,37 @@ impl ReservationManager {
                 (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
                 status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
                 expires_at, created_by)
-                VALUES ($1, $2, $3, $4, DEFAULT, DEFAULT, $5::reservation_status, $6::reservation_type, $7, $8, $9, $10, $11)",
+                VALUES ($1, $2, $3, $4::NUMERIC(12,4), $5::NUMERIC(12,4), $6::NUMERIC(12,4), 
+                $7::reservation_status, $8::reservation_type, $9, $10::NUMERIC(10,6), $11, $12, $13)",
                 &[
-                    &reservation_id,              // $1: UUID
-                    &account_id_i32,              // $2: INTEGER
-                    &call_uuid_str,               // $3: VARCHAR
-                    &total_reservation,           // $4: NUMERIC(12,4)
-                    &"active",                    // $7: reservation_status
-                    &"initial",                   // $8: reservation_type
-                    &dest_prefix_str,             // $9: VARCHAR(20)
-                    &rate_per_minute,             // $10: NUMERIC(10,6)
-                    &INITIAL_RESERVATION_MINUTES, // $11: INTEGER
-                    &expires_at_naive,            // $12: TIMESTAMP
-                    &"system",                    // $13: VARCHAR(100)
+                    &reservation_id,
+                    &account_id_i32,
+                    &call_uuid_str,
+                    &reserved_f64,
+                    &0.0_f64,
+                    &0.0_f64,
+                    &"active",
+                    &"initial",
+                    &dest_prefix_str,
+                    &rate_f64,
+                    &INITIAL_RESERVATION_MINUTES,
+                    &expires_at_naive,
+                    &"system",
                 ],
             )
             .await
             .map_err(|e| {
                 error!("❌ Failed to insert reservation: {}", e);
-                error!("   Error kind: {:?}", e.code());
-                if let Some(db_err) = e.as_db_error() {
-                    error!("   DB Error severity: {:?}", db_err.severity());
-                    error!("   DB Error message: {}", db_err.message());
-                    error!("   DB Error detail: {:?}", db_err.detail());
-                    error!("   DB Error hint: {:?}", db_err.hint());
-                    error!("   DB Error position: {:?}", db_err.position());
-                }
-                
-                // Intentar una inserción simplificada para debug
-                error!("🔬 Attempting simplified insert for debugging...");
                 BillingError::Database(e)
             })?;
-    
-        info!("✅ Reservation inserted successfully");
-        
+
         // Cache in Redis
         let cache_data = serde_json::json!({
             "account_id": account_id,
             "call_uuid": call_uuid,
-            "reserved_amount": total_reservation.to_f64().unwrap(),
+            "reserved_amount": reserved_f64,
             "status": "active",
-            "rate_per_minute": rate_per_minute.to_f64().unwrap(),
+            "rate_per_minute": rate_f64,
         });
 
         self.redis
@@ -184,13 +155,11 @@ impl ReservationManager {
             .await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
 
-        // Add to active reservations set
         self.redis
             .sadd(&format!("active_reservations:{}", account_id), &reservation_id.to_string())
             .await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
 
-        // Calculate max duration
         let max_duration_seconds = ((total_reservation / rate_per_minute) * Decimal::from(60))
             .to_i32()
             .unwrap_or(0);
@@ -204,7 +173,7 @@ impl ReservationManager {
             success: true,
             reason: "created".to_string(),
             reservation_id,
-            reserved_amount: total_reservation.to_f64().unwrap(),
+            reserved_amount: reserved_f64,
             max_duration_seconds,
         })
     }
