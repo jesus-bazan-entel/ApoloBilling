@@ -101,32 +101,34 @@ impl CdrGenerator {
 
         // Insert CDR - compatible con esquema actual
         // Usa CAST para convertir UUID string a tipo UUID
-    let cdr_id: i64 = client
-        .query_one(
-            "INSERT INTO cdrs
-             (uuid, account_id, caller, callee, start_time, answer_time, end_time,
-              duration, billsec, hangup_cause, rate_applied, cost, direction, freeswitch_server_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7,
-                     $8, $9, $10, $11, $12, $13, $14)
-             RETURNING id",
-            &[
-                &event.uuid,                // VARCHAR
-                &account_id,
-                &event.caller,
-                &event.callee,
-                &event.start_time,
-                &event.answer_time,
-                &event.end_time,
-                &event.duration,
-                &event.billsec,
-                &event.hangup_cause,
-                &rate_per_minute,            // → rate_applied
-                &cost,
-                &event.direction,
-                &event.server_id,
-            ],
-        )
-        .await?;
+        let row = client
+            .query_one(
+                "INSERT INTO cdrs
+                 (uuid, account_id, caller, callee, start_time, answer_time, end_time,
+                  duration, billsec, hangup_cause, rate_applied, cost, direction, freeswitch_server_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7,
+                         $8, $9, $10, $11, $12, $13, $14)
+                 RETURNING id",
+                &[
+                    &event.uuid,
+                    &account_id,
+                    &event.caller,
+                    &event.callee,
+                    &event.start_time,
+                    &event.answer_time,
+                    &event.end_time,
+                    &event.duration,
+                    &event.billsec,
+                    &event.hangup_cause,
+                    &rate_per_minute,
+                    &cost,
+                    &event.direction,
+                    &event.server_id,
+                ],
+            )
+            .await?;
+        
+        let cdr_id: i64 = row.get("id");
 
         // Consume reservation if exists
         if account_id.is_some() && cost.is_some() {
