@@ -763,27 +763,127 @@ async def dashboard_auditoria(request: Request, user: Usuario = Depends(get_admi
     })
 
 @router.get("/dashboard/cdr", response_class=HTMLResponse)
-async def dashboard_cdr_view(request: Request, user: Usuario = Depends(get_current_active_user)):
-    from datetime import datetime
-    # Dummy stats for CDR
-    stats = {
-        "total_calls": 120,
-        "completed_calls": 95,
-        "failed_calls": 5,
-        "unanswered_calls": 20,
-        "total_cost": 450.75,
-        "total_duration": 15000  # seconds
-    }
-    # Dummy chart data
-    labels = ["08:00", "09:00", "10:00", "11:00", "12:00"]
-    data = [10, 25, 30, 40, 15]
+async def dashboard_cdr_view(
+    request: Request, 
+    db: Session = Depends(get_db),
+    user: Usuario = Depends(get_current_active_user),
+    phone_number: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    status: str = "",
+    direction: str = "",
+    page: int = 1
+):
+    from datetime import datetime, timedelta
+    from sqlalchemy import func, extract, case
+    from app.models.cdr import CDR
     
-    # Dummy table rows: [origin, destination, timestamp, user, duration_sec, cost, id, status, direction, quality_score, call_type_display, direction_display]
-    rows = [
-        ["1001", "987654321", datetime.now(), "admin", 120, 0.50, 1, "completed", "outbound", 5, "Nacional", "Saliente"],
-        ["1002", "1003", datetime.now(), "user", 60, 0.00, 2, "completed", "internal", 5, "Interna", "Interna"],
-        ["999888777", "1001", datetime.now(), "external", 0, 0.00, 3, "no_answer", "inbound", 0, "Entrante", "Entrante"]
-    ]
+    # Construir query base
+    query = db.query(CDR)
+    
+    # Aplicar filtros
+    if phone_number:
+        query = query.filter(
+            (CDR.caller_number.like(f"%{phone_number}%")) | 
+            (CDR.called_number.like(f"%{phone_number}%"))
+        )
+    
+    if start_date:
+        try:
+            start_dt = datetime.fromisoformat(start_date)
+            query = query.filter(CDR.start_time >= start_dt)
+        except:
+            pass
+    
+    if end_date:
+        try:
+            end_dt = datetime.fromisoformat(end_date) + timedelta(days=1)
+            query = query.filter(CDR.start_time < end_dt)
+        except:
+            pass
+    
+    if status:
+        if status == "no_answer":
+            query = query.filter(CDR.billsec == 0)
+        elif status == "disconnected":
+            query = query.filter(CDR.billsec > 0)
+    
+    if direction:
+        query = query.filter(CDR.direction == direction)
+    
+    # Calcular estadísticas
+    total_calls = query.count()
+    completed_calls = query.filter(CDR.billsec > 0).count()
+    unanswered_calls = query.filter(CDR.billsec == 0).count()
+    total_cost = db.query(func.coalesce(func.sum(CDR.cost), 0.0)).filter(CDR.id.in_(query.with_entities(CDR.id))).scalar()
+    total_duration = db.query(func.coalesce(func.sum(CDR.billsec), 0)).filter(CDR.id.in_(query.with_entities(CDR.id))).scalar()
+    
+    stats = {
+        "total_calls": total_calls,
+        "completed_calls": completed_calls,
+        "failed_calls": 0,
+        "unanswered_calls": unanswered_calls,
+        "total_cost": float(total_cost) if total_cost else 0.0,
+        "total_duration": int(total_duration) if total_duration else 0
+    }
+    
+    # Datos para gráfico por hora (últimas 24 horas)
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    hourly_data = db.query(
+        extract('hour', CDR.start_time).label('hour'),
+        func.count(CDR.id).label('count')
+    ).filter(
+        CDR.start_time >= today_start
+    ).group_by('hour').order_by('hour').all()
+    
+    labels = [f"{int(h):02d}:00" for h, _ in hourly_data] if hourly_data else []
+    data = [int(c) for _, c in hourly_data] if hourly_data else []
+    
+    # Datos para gráficos de estado y dirección
+    status_data_query = db.query(
+        case(
+            (CDR.billsec > 0, "Contestadas"),
+            else_="No Contestadas"
+        ).label('status'),
+        func.count(CDR.id).label('count')
+    ).filter(CDR.id.in_(query.with_entities(CDR.id))).group_by('status').all()
+    
+    status_labels = [s for s, _ in status_data_query]
+    status_data = [int(c) for _, c in status_data_query]
+    
+    direction_data_query = db.query(
+        CDR.direction,
+        func.count(CDR.id).label('count')
+    ).filter(CDR.id.in_(query.with_entities(CDR.id))).group_by(CDR.direction).all()
+    
+    direction_labels = [d.capitalize() if d else "Desconocida" for d, _ in direction_data_query]
+    direction_data = [int(c) for _, c in direction_data_query]
+    
+    # Paginación
+    page_size = 50
+    total_records = query.count()
+    total_pages = (total_records + page_size - 1) // page_size
+    offset = (page - 1) * page_size
+    
+    # Obtener CDRs para la página actual
+    cdrs = query.order_by(CDR.start_time.desc()).offset(offset).limit(page_size).all()
+    
+    # Convertir a formato de rows para el template
+    # [caller, called, start_time, ?, duration, cost, id, hangup_cause, direction, ?]
+    rows = []
+    for cdr in cdrs:
+        rows.append([
+            cdr.caller_number,           # 0: Origen
+            cdr.called_number,           # 1: Destino
+            cdr.start_time,              # 2: Fecha/Hora
+            None,                        # 3: Usuario (no usado)
+            cdr.billsec if cdr.billsec else 0,  # 4: Duración
+            float(cdr.cost) if cdr.cost else 0.0,  # 5: Costo
+            cdr.id,                      # 6: ID
+            cdr.hangup_cause if cdr.hangup_cause else "NORMAL_CLEARING",  # 7: Estado/Causa
+            cdr.direction if cdr.direction else "outbound",  # 8: Dirección
+            cdr.hangup_cause if cdr.hangup_cause else "NORMAL_CLEARING",  # 9: Causa (repetido)
+        ])
     
     return templates.TemplateResponse("dashboard_cdr.html", {
         "request": request, 
@@ -793,13 +893,14 @@ async def dashboard_cdr_view(request: Request, user: Usuario = Depends(get_curre
         "labels": labels,
         "data": data,
         "rows": rows,
-        "status_labels": ["Completadas", "Fallidas", "No Contestadas"],
-        "status_data": [95, 5, 20],
-        "direction_labels": ["Entrantes", "Salientes", "Internas"],
-        "direction_data": [30, 60, 30],
-        "page": 1,
-        "total_pages": 1
+        "status_labels": status_labels if status_labels else ["Sin datos"],
+        "status_data": status_data if status_data else [0],
+        "direction_labels": direction_labels if direction_labels else ["Sin datos"],
+        "direction_data": direction_data if direction_data else [0],
+        "page": page,
+        "total_pages": total_pages if total_pages > 0 else 1
     })
+
 
 @router.get("/api/reservations")
 async def get_active_reservations(db: SessionLocal = Depends(get_db), user: Usuario = Depends(get_current_active_user)):
@@ -928,6 +1029,7 @@ async def dashboard_metrics(request: Request, user: Usuario = Depends(get_admin_
     })
 async def dashboard_auditoria(request: Request, user: Usuario = Depends(get_admin_user)):
      return templates.TemplateResponse("dashboard_auditoria.html", {"request": request, "title": "Auditoría"})
+
 
 
 
