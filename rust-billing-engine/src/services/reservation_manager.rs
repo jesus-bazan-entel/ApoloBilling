@@ -104,11 +104,24 @@ impl ReservationManager {
         let dest_prefix_str = String::from(&destination[..std::cmp::min(10, destination.len())]);
         let call_uuid_str = call_uuid.to_string();
 
+        
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
+
+        // ✅ Crear valores Decimal explícitos con from_str
+        let zero_amount = Decimal::from_str("0.0000").unwrap();
         
-        // ✅ SOLUCIÓN: Usar Decimal::ZERO en lugar de 0.0
-        client
+        info!("🔍 DEBUG - About to insert reservation:");
+        info!("   reservation_id: {}", reservation_id);
+        info!("   account_id_i32: {}", account_id_i32);
+        info!("   call_uuid: {}", call_uuid_str);
+        info!("   total_reservation: {}", total_reservation);
+        info!("   zero_amount: {}", zero_amount);
+        info!("   dest_prefix: {}", dest_prefix_str);
+        info!("   rate_per_minute: {}", rate_per_minute);
+        info!("   expires_at_naive: {}", expires_at_naive);
+        
+        let result = client
             .execute(
                 "INSERT INTO balance_reservations 
                 (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
@@ -120,10 +133,10 @@ impl ReservationManager {
                     &account_id_i32,              // $2: INTEGER
                     &call_uuid_str,               // $3: VARCHAR
                     &total_reservation,           // $4: NUMERIC(12,4)
-                    &Decimal::ZERO,               // $5: NUMERIC(12,4) - consumed_amount ✅
-                    &Decimal::ZERO,               // $6: NUMERIC(12,4) - released_amount ✅
-                    &"active",                    // $7: reservation_status (ENUM as text)
-                    &"initial",                   // $8: reservation_type (ENUM as text)
+                    &zero_amount,                 // $5: NUMERIC(12,4) ✅
+                    &zero_amount,                 // $6: NUMERIC(12,4) ✅
+                    &"active",                    // $7: reservation_status
+                    &"initial",                   // $8: reservation_type
                     &dest_prefix_str,             // $9: VARCHAR(20)
                     &rate_per_minute,             // $10: NUMERIC(10,6)
                     &INITIAL_RESERVATION_MINUTES, // $11: INTEGER
@@ -131,11 +144,26 @@ impl ReservationManager {
                     &"system",                    // $13: VARCHAR(100)
                 ],
             )
-            .await
-            .map_err(|e| {
-                error!("❌ Failed to insert reservation: {}", e);
-                BillingError::Database(e)
-            })?;
+            .await;
+
+        if let Err(ref e) = result {
+            error!("❌ Failed to insert reservation: {}", e);
+            error!("   reservation_id: {}", reservation_id);
+            error!("   account_id_i32: {}", account_id_i32);
+            error!("   call_uuid: {}", call_uuid_str);
+            error!("   total_reservation: {} (type: {})", total_reservation, std::any::type_name_of_val(&total_reservation));
+            error!("   zero_amount: {} (type: {})", zero_amount, std::any::type_name_of_val(&zero_amount));
+            error!("   rate_per_minute: {} (type: {})", rate_per_minute, std::any::type_name_of_val(&rate_per_minute));
+            
+            // Intentar descubrir qué parámetro falla exactamente
+            if let Some(db_err) = e.as_db_error() {
+                error!("   DB Error details: {:?}", db_err);
+            }
+            
+            return Err(BillingError::Database(e.clone()));
+        }
+        
+        result.map_err(|e| BillingError::Database(e))?;
 
         // Cache in Redis
         let cache_data = serde_json::json!({
