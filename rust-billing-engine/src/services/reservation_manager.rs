@@ -116,7 +116,7 @@ impl ReservationManager {
                 (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
                 status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
                 expires_at, created_by)
-                VALUES ($1, $2, $3, $4, 0, 0, $5, $6, $7, $8, $9, $10, 'system')",
+                VALUES ($1, $2, $3, $4, 0.0, 0.0, $5, $6, $7, $8, $9, $10, 'system')",
                 &[
                     &reservation_id,
                     &account_id_i32,
