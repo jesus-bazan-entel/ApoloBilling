@@ -110,7 +110,8 @@ impl ReservationManager {
         let account_id_i32 = account_id as i32;
         let expires_at_naive = expires_at.naive_utc();
         let dest_prefix_str = String::from(&destination[..std::cmp::min(10, destination.len())]); // Crear string temporal
-        
+        let call_uuid_str = call_uuid.to_string();
+
         client
             .execute(
                 "INSERT INTO balance_reservations 
@@ -121,7 +122,7 @@ impl ReservationManager {
                 &[
                     &reservation_id,
                     &account_id_i32,
-                    call_uuid,
+                    &call_uuid_str,
                     &total_reservation_f64,
                     &"active",
                     &"initial",
