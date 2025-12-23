@@ -8,17 +8,17 @@ class CDR(Base):
     __tablename__ = "cdrs"
 
     id = Column(BigInteger, primary_key=True, index=True)
-    call_uuid = Column(String, unique=True, index=True, nullable=False)  # CORREGIDO de 'uuid'
+    uuid = Column(String, unique=True, index=True, nullable=False)
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
-    caller_number = Column(String, nullable=False)  # CORREGIDO de 'caller'
-    called_number = Column(String, nullable=False)  # CORREGIDO de 'callee'
+    caller = Column(String, nullable=False)
+    callee = Column(String, nullable=False)
     start_time = Column(DateTime, nullable=False)
     answer_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=False)
     duration = Column(Integer, default=0)
     billsec = Column(Integer, default=0)
     hangup_cause = Column(String)
-    rate_id = Column(Integer, nullable=True)  # CORREGIDO de 'rate_applied'
+    rate_applied = Column(Numeric(10, 4), nullable=True)
     cost = Column(Numeric(10, 4), nullable=True)
     direction = Column(String, default="outbound")
     freeswitch_server_id = Column(String, nullable=True)
