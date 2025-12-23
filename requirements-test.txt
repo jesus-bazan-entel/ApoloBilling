@@ -1,0 +1,49 @@
+# Testing Requirements para Apolo Billing
+# Dependencias para el sistema de validación multi-agente
+
+# Core testing framework
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-xdist>=3.3.0  # Para ejecución paralela
+pytest-timeout>=2.1.0
+pytest-html>=3.2.0  # Reportes HTML
+
+# HTTP testing
+requests>=2.31.0
+httpx>=0.24.0  # Para tests async
+
+# Browser automation (para Agente 6: UI/UX)
+selenium>=4.11.0
+playwright>=1.36.0
+
+# Accesibilidad testing
+axe-selenium-python>=2.1.6
+
+# Load testing (para Agente 5: Performance)
+locust>=2.15.0
+
+# Mocking y fixtures
+pytest-mock>=3.11.0
+faker>=19.2.0
+factory-boy>=3.2.1
+
+# Database testing
+pytest-postgresql>=5.0.0
+pytest-redis>=3.0.0
+
+# WebSocket testing
+websockets>=11.0.3
+websocket-client>=1.6.1
+
+# Security testing (para Agente 4)
+bandit>=1.7.5
+safety>=2.3.5
+
+# Datos de prueba
+openpyxl>=3.1.2  # Para cargas masivas Excel
+pandas>=2.0.3  # Para manipulación de datos de prueba
+
+# Utilidades
+colorama>=0.4.6  # Para output colorido en terminal
+python-dotenv>=1.0.0
