@@ -5,6 +5,8 @@ use crate::models::ConsumeReservationRequest;
 use crate::error::BillingError;
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
+use chrono::NaiveDateTime;
+
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use tracing::{info, warn, error};
@@ -99,6 +101,11 @@ impl CdrGenerator {
             (None, None, None)
         };
 
+        let start_time: NaiveDateTime = event.start_time.naive_utc();
+        let answer_time: Option<NaiveDateTime> =
+            event.answer_time.map(|t| t.naive_utc());
+        let end_time: NaiveDateTime = event.end_time.naive_utc();
+        
         // Insert CDR - compatible con esquema actual
         // Usa CAST para convertir UUID string a tipo UUID
         let row = client
@@ -114,9 +121,9 @@ impl CdrGenerator {
                     &account_id,
                     &event.caller,
                     &event.callee,
-                    &event.start_time,
-                    &event.answer_time,
-                    &event.end_time,
+                    &start_time,
+                    &answer_time,
+                    &end_time,
                     &event.duration,
                     &event.billsec,
                     &event.hangup_cause,
