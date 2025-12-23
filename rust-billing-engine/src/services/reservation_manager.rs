@@ -108,20 +108,25 @@ impl ReservationManager {
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
 
-        // ✅ Crear valores Decimal explícitos con from_str
-        let zero_decimal = Decimal::new(0, 4);
+        let consumed_amount = Decimal::new(0, 4);
+        let released_amount = Decimal::new(0, 4);
         
-        info!("🔍 DEBUG - About to insert reservation:");
-        info!("   reservation_id: {}", reservation_id);
-        info!("   account_id_i32: {}", account_id_i32);
-        info!("   call_uuid: {}", call_uuid_str);
-        info!("   total_reservation: {}", total_reservation);
-        info!("   zero_decimal: {}", zero_decimal);
-        info!("   dest_prefix: {}", dest_prefix_str);
-        info!("   rate_per_minute: {}", rate_per_minute);
-        info!("   expires_at_naive: {}", expires_at_naive);
+        info!("🔍 DEBUG - Inserting reservation with parameters:");
+        info!("   $1 reservation_id: {}", reservation_id);
+        info!("   $2 account_id: {}", account_id_i32);
+        info!("   $3 call_uuid: {}", call_uuid_str);
+        info!("   $4 reserved_amount: {}", total_reservation);
+        info!("   $5 consumed_amount: {}", consumed_amount);
+        info!("   $6 released_amount: {}", released_amount);
+        info!("   $7 status: active");
+        info!("   $8 reservation_type: initial");
+        info!("   $9 dest_prefix: {}", dest_prefix_str);
+        info!("   $10 rate_per_minute: {}", rate_per_minute);
+        info!("   $11 reserved_minutes: {}", INITIAL_RESERVATION_MINUTES);
+        info!("   $12 expires_at: {}", expires_at_naive);
+        info!("   $13 created_by: system");
         
-        let result = client
+        client
             .execute(
                 "INSERT INTO balance_reservations 
                 (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
@@ -129,19 +134,19 @@ impl ReservationManager {
                 expires_at, created_by)
                 VALUES ($1, $2, $3, $4, $5, $6, $7::reservation_status, $8::reservation_type, $9, $10, $11, $12, $13)",
                 &[
-                    &reservation_id,
-                    &account_id_i32,
-                    &call_uuid_str,
-                    &total_reservation,
-                    &zero_decimal,
-                    &zero_decimal,
-                    &"active",
-                    &"initial",
-                    &dest_prefix_str,
-                    &rate_per_minute,
-                    &INITIAL_RESERVATION_MINUTES,
-                    &expires_at_naive,
-                    &"system",
+                    &reservation_id,              // $1: UUID
+                    &account_id_i32,              // $2: INTEGER
+                    &call_uuid_str,               // $3: VARCHAR
+                    &total_reservation,           // $4: NUMERIC(12,4)
+                    &consumed_amount,             // $5: NUMERIC(12,4) ✅
+                    &released_amount,             // $6: NUMERIC(12,4) ✅
+                    &"active",                    // $7: reservation_status
+                    &"initial",                   // $8: reservation_type
+                    &dest_prefix_str,             // $9: VARCHAR(20)
+                    &rate_per_minute,             // $10: NUMERIC(10,6)
+                    &INITIAL_RESERVATION_MINUTES, // $11: INTEGER
+                    &expires_at_naive,            // $12: TIMESTAMP
+                    &"system",                    // $13: VARCHAR(100)
                 ],
             )
             .await
@@ -152,11 +157,15 @@ impl ReservationManager {
                     error!("   DB Error severity: {:?}", db_err.severity());
                     error!("   DB Error message: {}", db_err.message());
                     error!("   DB Error detail: {:?}", db_err.detail());
-                    error!("   DB Error column: {:?}", db_err.column());
+                    error!("   DB Error hint: {:?}", db_err.hint());
+                    error!("   DB Error position: {:?}", db_err.position());
                 }
+                
+                // Intentar una inserción simplificada para debug
+                error!("🔬 Attempting simplified insert for debugging...");
                 BillingError::Database(e)
             })?;
-        
+    
         info!("✅ Reservation inserted successfully");
         
         // Cache in Redis
