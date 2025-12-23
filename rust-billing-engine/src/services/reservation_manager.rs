@@ -206,7 +206,7 @@ impl ReservationManager {
             return Err(BillingError::ReservationFailed("No active reservations".to_string()));
         }
 
-        let account_id: i64 = rows[0].get(1);
+        let account_id: i64 = row.try_get::<_, Decimal>(1)?;
         let mut total_reserved = Decimal::ZERO;
         
         for row in &rows {
