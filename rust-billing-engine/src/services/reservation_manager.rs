@@ -90,60 +90,55 @@ impl ReservationManager {
                 max_duration_seconds: 0,
             });
         }
-
-        // Create reservation in database
+        
         let reservation_id = Uuid::new_v4();
         let expires_at = Utc::now() + Duration::seconds(RESERVATION_TTL);
         let expires_at_naive = expires_at.naive_utc();
         
         let account_id_i32 = account_id as i32;
         let dest_prefix = &destination[..std::cmp::min(10, destination.len())];
-        let call_uuid_str = call_uuid.to_string();
-
+    
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
         
-        // ✅ Convertir Decimal a f64 para evitar problemas de serialización
         let reserved_f64 = total_reservation.to_f64().unwrap_or(0.0);
         let rate_f64 = rate_per_minute.to_f64().unwrap_or(0.0);
-
-        info!("🔍 Inserting reservation:");
-        info!("   reservation_id: {}", reservation_id);
-        info!("   account_id: {}", account_id_i32);
-        info!("   call_uuid: {}", call_uuid);
-        info!("   reserved: {}", reserved_f64);
-        info!("   rate: {}", rate_f64);
+        
+        // ✅ SOLUCIÓN: Usar simple_query con valores escapados manualmente
+        // Sanitizar el call_uuid y dest_prefix para evitar SQL injection
+        let call_uuid_safe = call_uuid.replace("'", "''");
+        let dest_prefix_safe = dest_prefix.replace("'", "''");
+        
+        let query = format!(
+            "INSERT INTO balance_reservations 
+            (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
+            status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
+            expires_at, created_by)
+            VALUES ('{}', {}, '{}', {}::NUMERIC(12,4), 0.0000::NUMERIC(12,4), 0.0000::NUMERIC(12,4), 
+            'active'::reservation_status, 'initial'::reservation_type, '{}', {}::NUMERIC(10,6), {}, 
+            '{}'::TIMESTAMP, 'system')",
+            reservation_id,
+            account_id_i32,
+            call_uuid_safe,
+            reserved_f64,
+            dest_prefix_safe,
+            rate_f64,
+            INITIAL_RESERVATION_MINUTES,
+            expires_at_naive.format("%Y-%m-%d %H:%M:%S%.f")
+        );
+        
+        info!("🔍 Executing query: {}", &query[..200]); // Log primeros 200 chars
         
         client
-            .execute(
-                "INSERT INTO balance_reservations 
-                (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
-                status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
-                expires_at, created_by)
-                VALUES ($1, $2, $3, $4::NUMERIC(12,4), $5::NUMERIC(12,4), $6::NUMERIC(12,4), 
-                $7::reservation_status, $8::reservation_type, $9, $10::NUMERIC(10,6), $11, $12, $13)",
-                &[
-                    &reservation_id,
-                    &account_id_i32,
-                    &call_uuid,
-                    &reserved_f64,
-                    &0.0_f64,
-                    &0.0_f64,
-                    &"active",
-                    &"initial",
-                    &dest_prefix,
-                    &rate_f64,
-                    &INITIAL_RESERVATION_MINUTES,
-                    &expires_at_naive,
-                    &"system",
-                ],
-            )
+            .simple_query(&query)
             .await
             .map_err(|e| {
                 error!("❌ Failed to insert reservation: {}", e);
                 BillingError::Database(e)
             })?;
-
+    
+        info!("✅ Reservation inserted successfully");
+    
         // Cache in Redis
         let cache_data = serde_json::json!({
             "account_id": account_id,
@@ -152,7 +147,7 @@ impl ReservationManager {
             "status": "active",
             "rate_per_minute": rate_f64,
         });
-
+    
         self.redis
             .set(
                 &format!("reservation:{}", reservation_id),
@@ -161,28 +156,28 @@ impl ReservationManager {
             )
             .await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
-
+    
         self.redis
             .sadd(&format!("active_reservations:{}", account_id), &reservation_id.to_string())
             .await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
-
+    
         let max_duration_seconds = ((total_reservation / rate_per_minute) * Decimal::from(60))
             .to_i32()
             .unwrap_or(0);
-
+    
         info!(
             "✅ Reservation created: {} for account {}. Amount: ${}, Max duration: {}s",
-            reservation_id, account_id, total_reservation, max_duration_seconds
+            reservation_id, account_id, reserved_f64, max_duration_seconds
         );
-
+    
         Ok(ReservationResult {
             success: true,
             reason: "created".to_string(),
             reservation_id,
             reserved_amount: reserved_f64,
             max_duration_seconds,
-        })
+        }
     }
 
     pub async fn consume_reservation(
