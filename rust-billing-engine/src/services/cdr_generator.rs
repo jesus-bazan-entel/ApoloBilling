@@ -101,41 +101,32 @@ impl CdrGenerator {
 
         // Insert CDR - compatible con esquema actual
         // Usa CAST para convertir UUID string a tipo UUID
-        let cdr_id: i64 = client
-            .query_one(
-                "INSERT INTO cdrs 
-                 (call_uuid, account_id, caller_number, called_number, start_time, answer_time, end_time,
-                  duration, billsec, hangup_cause, rate_per_minute, cost)
-                 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                 RETURNING id",
-                &[
-                    &event.uuid,                    // $1 - cast to UUID
-                    &account_id,                    // $2 - puede ser NULL
-                    &event.caller,                  // $3 - caller_number
-                    &event.callee,                  // $4 - called_number
-                    &event.start_time,              // $5
-                    &event.answer_time,             // $6
-                    &event.end_time,                // $7
-                    &event.duration,                // $8
-                    &event.billsec,                 // $9
-                    &event.hangup_cause,            // $10
-                    &rate_per_minute,               // $11 - puede ser NULL
-                    &cost,                          // $12 - puede ser NULL
-                ],
-            )
-            .await
-            .map_err(|e| {
-                error!("❌ Failed to insert CDR: {}", e);
-                error!("   UUID: {}", event.uuid);
-                error!("   Account ID: {:?}", account_id);
-                error!("   Caller: {}", event.caller);
-                error!("   Callee: {}", event.callee);
-                error!("   Duration: {}s", event.duration);
-                error!("   Billsec: {}s", event.billsec);
-                error!("   Error detail: {}", e);
-                BillingError::Database(e)
-            })?
-            .get(0);
+    let cdr_id: i64 = client
+        .query_one(
+            "INSERT INTO cdrs
+             (uuid, account_id, caller, callee, start_time, answer_time, end_time,
+              duration, billsec, hangup_cause, rate_applied, cost, direction, freeswitch_server_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7,
+                     $8, $9, $10, $11, $12, $13, $14)
+             RETURNING id",
+            &[
+                &event.uuid,                // VARCHAR
+                &account_id,
+                &event.caller,
+                &event.callee,
+                &event.start_time,
+                &event.answer_time,
+                &event.end_time,
+                &event.duration,
+                &event.billsec,
+                &event.hangup_cause,
+                &rate_per_minute,            // → rate_applied
+                &cost,
+                &event.direction,
+                &event.server_id,
+            ],
+        )
+        .await?;
 
         // Consume reservation if exists
         if account_id.is_some() && cost.is_some() {
