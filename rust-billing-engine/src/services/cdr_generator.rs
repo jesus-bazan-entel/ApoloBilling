@@ -101,11 +101,15 @@ impl CdrGenerator {
             (None, None, None)
         };
 
-        let start_time: NaiveDateTime = event.start_time.naive_utc();
-        let answer_time: Option<NaiveDateTime> =
-            event.answer_time.map(|t| t.naive_utc());
-        let end_time: NaiveDateTime = event.end_time.naive_utc();
+        let start_time = NaiveDateTime::from_timestamp_micros(event.start_time)
+            .ok_or_else(|| BillingError::InvalidRequest("invalid start_time".into()))?;
         
+        let answer_time = event.answer_time
+            .and_then(|t| NaiveDateTime::from_timestamp_micros(t));
+        
+        let end_time = NaiveDateTime::from_timestamp_micros(event.end_time)
+            .ok_or_else(|| BillingError::InvalidRequest("invalid end_time".into()))?;
+            
         // Insert CDR - compatible con esquema actual
         // Usa CAST para convertir UUID string a tipo UUID
         let row = client
