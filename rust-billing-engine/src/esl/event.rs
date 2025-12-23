@@ -100,18 +100,28 @@ impl EslEvent {
     }
 
     /// Parse FreeSWITCH epoch timestamp (microseconds since epoch) to DateTime<Utc>
+    //pub fn timestamp_to_datetime(&self, header_name: &str) -> Option<DateTime<Utc>> {
+    //    self.headers.get(header_name)
+    //        .and_then(|s| s.parse::<i64>().ok())
+    //        .and_then(|micros| {
+    //            // FreeSWITCH timestamps are in microseconds
+    //            let secs = micros / 1_000_000;
+    //            let nsecs = ((micros % 1_000_000) * 1000) as u32;
+    //            NaiveDateTime::from_timestamp_opt(secs, nsecs)
+    //                .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
+    //        })
+    //}
     pub fn timestamp_to_datetime(&self, header_name: &str) -> Option<DateTime<Utc>> {
-        self.headers.get(header_name)
-            .and_then(|s| s.parse::<i64>().ok())
-            .and_then(|micros| {
-                // FreeSWITCH timestamps are in microseconds
-                let secs = micros / 1_000_000;
-                let nsecs = ((micros % 1_000_000) * 1000) as u32;
-                NaiveDateTime::from_timestamp_opt(secs, nsecs)
-                    .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
-            })
+        let micros = self.headers.get(header_name)?.parse::<i64>().ok()?;
+    
+        // FreeSWITCH sometimes sends 0 → invalid
+        if micros <= 0 {
+            return None;
+        }
+    
+        DateTime::<Utc>::from_timestamp_micros(micros)
     }
-
+    
     /// Get call start time (CHANNEL_CREATE epoch)
     pub fn start_time(&self) -> Option<DateTime<Utc>> {
         // Try variable_start_epoch first (most accurate)
