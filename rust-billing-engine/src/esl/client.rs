@@ -112,15 +112,15 @@ impl FreeSwitchClient {
         redis: RedisClient,  // ✅ Agregado
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Connect to FreeSWITCH
-        let connection = EslConnection::connect(
+        let connection = Arc::new(EslConnection::connect(
             &server.host,
             server.port,
             &server.password,
-        ).await?;
+        ).await?);
 
         info!("✅ Connected and authenticated to FreeSWITCH: {}", server_id);
 
-        // Event handler
+        // Event handler with shared connection
         let event_handler = EventHandler::new(
             server_id.to_string(),
             auth_service,
@@ -128,6 +128,7 @@ impl FreeSwitchClient {
             cdr_generator,
             db_pool,  // ✅ Agregado
             redis,  // ✅ Agregado
+            connection.clone(),  // ✅ Pass connection for sending commands
         );
 
         // Event loop

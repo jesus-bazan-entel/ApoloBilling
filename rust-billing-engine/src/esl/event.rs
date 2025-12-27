@@ -1,5 +1,6 @@
 // src/esl/event.rs
 use std::collections::HashMap;
+use chrono::{DateTime, Utc, NaiveDateTime};
 
 #[derive(Debug, Clone)]
 pub struct EslEvent {
@@ -96,5 +97,58 @@ impl EslEvent {
 
     pub fn hangup_cause(&self) -> Option<&String> {
         self.headers.get("Hangup-Cause")
+    }
+
+    /// Parse FreeSWITCH epoch timestamp (microseconds since epoch) to DateTime<Utc>
+    //pub fn timestamp_to_datetime(&self, header_name: &str) -> Option<DateTime<Utc>> {
+    //    self.headers.get(header_name)
+    //        .and_then(|s| s.parse::<i64>().ok())
+    //        .and_then(|micros| {
+    //            // FreeSWITCH timestamps are in microseconds
+    //            let secs = micros / 1_000_000;
+    //            let nsecs = ((micros % 1_000_000) * 1000) as u32;
+    //            NaiveDateTime::from_timestamp_opt(secs, nsecs)
+    //                .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
+    //        })
+    //}
+    /// Convert timestamp header to DateTime<Utc>
+    /// Handles both microsecond timestamps (Event-Date-Timestamp) and second timestamps (variable_*_epoch)
+    pub fn timestamp_to_datetime(&self, header_name: &str) -> Option<DateTime<Utc>> {
+        let timestamp = self.headers.get(header_name)?.parse::<i64>().ok()?;
+    
+        // FreeSWITCH sometimes sends 0 → invalid
+        if timestamp <= 0 {
+            return None;
+        }
+    
+        // Determine if timestamp is in seconds or microseconds based on header name
+        if header_name.starts_with("variable_") && header_name.ends_with("_epoch") {
+            // variable_*_epoch headers are in SECONDS
+            DateTime::<Utc>::from_timestamp(timestamp, 0)
+        } else {
+            // Event-Date-Timestamp and other headers are in MICROSECONDS
+            DateTime::<Utc>::from_timestamp_micros(timestamp)
+        }
+    }
+    
+    /// Get call start time (CHANNEL_CREATE epoch)
+    pub fn start_time(&self) -> Option<DateTime<Utc>> {
+        // Try variable_start_epoch first (most accurate)
+        self.timestamp_to_datetime("variable_start_epoch")
+            // Fall back to Event-Date-Timestamp for CHANNEL_CREATE
+            .or_else(|| self.timestamp_to_datetime("Event-Date-Timestamp"))
+    }
+
+    /// Get call answer time
+    pub fn answer_time(&self) -> Option<DateTime<Utc>> {
+        self.timestamp_to_datetime("variable_answer_epoch")
+    }
+
+    /// Get call end time
+    pub fn end_time(&self) -> Option<DateTime<Utc>> {
+        // Try variable_end_epoch first
+        self.timestamp_to_datetime("variable_end_epoch")
+            // Fall back to current event timestamp
+            .or_else(|| self.timestamp_to_datetime("Event-Date-Timestamp"))
     }
 }

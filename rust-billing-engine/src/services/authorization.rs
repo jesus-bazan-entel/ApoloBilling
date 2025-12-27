@@ -1,4 +1,5 @@
 // src/services/authorization.rs
+
 use crate::models::{AuthRequest, AuthResponse, Account, AccountStatus, AccountType};
 use crate::database::DbPool;
 use crate::cache::RedisClient;
@@ -7,9 +8,9 @@ use crate::error::BillingError;
 use std::sync::Arc;
 use uuid::Uuid;
 use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive; // Added for to_f64
+use rust_decimal::prelude::ToPrimitive;
 use tracing::{info, warn, error};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, NaiveDateTime, TimeZone}; // ✅ Añadir NaiveDateTime y TimeZone
 
 pub struct AuthorizationService {
     db_pool: DbPool,
@@ -64,7 +65,7 @@ impl AuthorizationService {
                 authorized: false,
                 reason: format!("account_{:?}", account.status).to_lowercase(),
                 uuid: call_uuid,
-                account_id: Some(account.id),
+                account_id: Some(account.id.into()),
                 account_number: Some(account.account_number),
                 reservation_id: None,
                 reserved_amount: None,
@@ -82,7 +83,7 @@ impl AuthorizationService {
                     authorized: false,
                     reason: "no_rate_found".to_string(),
                     uuid: call_uuid,
-                    account_id: Some(account.id),
+                    account_id: Some(account.id.into()),
                     account_number: Some(account.account_number),
                     reservation_id: None,
                     reserved_amount: None,
@@ -100,7 +101,7 @@ impl AuthorizationService {
         // 4. Create reservation
         let reservation_result = self.reservation_mgr
             .create_reservation(
-                account.id,
+                account.id.into(),
                 &call_uuid,
                 &req.callee,
                 rate.rate_per_minute,
@@ -113,7 +114,7 @@ impl AuthorizationService {
                 authorized: false,
                 reason: reservation_result.reason,
                 uuid: call_uuid,
-                account_id: Some(account.id),
+                account_id: Some(account.id.into()),
                 account_number: Some(account.account_number),
                 reservation_id: None,
                 reserved_amount: None,
@@ -132,7 +133,7 @@ impl AuthorizationService {
             authorized: true,
             reason: "authorized".to_string(),
             uuid: call_uuid,
-            account_id: Some(account.id),
+            account_id: Some(account.id.into()),
             account_number: Some(account.account_number.clone()),
             reservation_id: Some(reservation_result.reservation_id),
             reserved_amount: Some(reservation_result.reserved_amount),
@@ -141,9 +142,7 @@ impl AuthorizationService {
         })
     }
 
-
     async fn find_account_by_ani(&self, ani: &str) -> Result<Option<Account>, BillingError> {
-        // Normalize ANI
         let normalized = ani.replace('+', "").replace(' ', "").replace('-', "");
 
         let client = self.db_pool.get().await
@@ -151,74 +150,36 @@ impl AuthorizationService {
         
         let row = client
             .query_opt(
-                "SELECT id, account_number, account_type::text, balance, credit_limit, 
-                        currency, status::text, max_concurrent_calls, 
-                        created_at AT TIME ZONE 'UTC', updated_at AT TIME ZONE 'UTC'
+                "SELECT id, account_number, account_type::text, balance, 
+                        max_concurrent_calls, status::text, 
+                        created_at, updated_at
                 FROM accounts
-                WHERE (account_number = $1 OR account_number = $2
-                    OR customer_phone = $1 OR customer_phone = $2)
-                AND status::text = 'ACTIVE'
+                WHERE (account_number = $1 OR account_number = $2)
+                AND status = 'ACTIVE'
                 LIMIT 1",
                 &[&ani, &normalized],
             )
             .await
             .map_err(|e| {
-                error!("❌ Database error finding account: {}", e);
-                BillingError::Database(e)  // ✅ CORREGIDO
+                error!("❌ Database error finding account: {:?}", e);
+                BillingError::Database(e)
             })?;
 
         match row {
             Some(r) => {
-                // Extrae cada campo con manejo de errores individual
-                let id: i64 = r.try_get(0).map_err(|e| {
-                    error!("❌ Error getting id (column 0): {}", e);
-                    BillingError::Internal(format!("Column 0 error: {}", e))
-                })?;
+                let id: i32 = r.get(0);
+                let account_number: String = r.get(1);
+                let account_type_str: String = r.get(2);
+                let balance: Decimal = r.get(3);
+                let max_concurrent_calls: i32 = r.get(4);
+                let status_str: String = r.get(5);
                 
-                let account_number: String = r.try_get(1).map_err(|e| {
-                    error!("❌ Error getting account_number (column 1): {}", e);
-                    BillingError::Internal(format!("Column 1 error: {}", e))
-                })?;
+                // ✅ SOLUCIÓN: Obtener como NaiveDateTime y convertir a DateTime<Utc>
+                let created_at_naive: NaiveDateTime = r.get(6);
+                let updated_at_naive: NaiveDateTime = r.get(7);
                 
-                let account_type_str: String = r.try_get(2).map_err(|e| {
-                    error!("❌ Error getting account_type (column 2): {}", e);
-                    BillingError::Internal(format!("Column 2 error: {}", e))
-                })?;
-                
-                let balance: Decimal = r.try_get(3).map_err(|e| {
-                    error!("❌ Error getting balance (column 3): {}", e);
-                    BillingError::Internal(format!("Column 3 error: {}", e))
-                })?;
-                
-                let credit_limit: Decimal = r.try_get(4).map_err(|e| {
-                    error!("❌ Error getting credit_limit (column 4): {}", e);
-                    BillingError::Internal(format!("Column 4 error: {}", e))
-                })?;
-                
-                let currency: String = r.try_get(5).map_err(|e| {
-                    error!("❌ Error getting currency (column 5): {}", e);
-                    BillingError::Internal(format!("Column 5 error: {}", e))
-                })?;
-                
-                let status_str: String = r.try_get(6).map_err(|e| {
-                    error!("❌ Error getting status (column 6): {}", e);
-                    BillingError::Internal(format!("Column 6 error: {}", e))
-                })?;
-                
-                let max_concurrent_calls: i32 = r.try_get(7).map_err(|e| {
-                    error!("❌ Error getting max_concurrent_calls (column 7): {}", e);
-                    BillingError::Internal(format!("Column 7 error: {}", e))
-                })?;
-                
-                let created_at: DateTime<Utc> = r.try_get(8).map_err(|e| {
-                    error!("❌ Error getting created_at (column 8): {}", e);
-                    BillingError::Internal(format!("Column 8 error: {}", e))
-                })?;
-                
-                let updated_at: DateTime<Utc> = r.try_get(9).map_err(|e| {
-                    error!("❌ Error getting updated_at (column 9): {}", e);
-                    BillingError::Internal(format!("Column 9 error: {}", e))
-                })?;
+                let created_at = Utc.from_utc_datetime(&created_at_naive);
+                let updated_at = Utc.from_utc_datetime(&updated_at_naive);
 
                 info!(
                     "✅ Found account: {} (ID: {}, Type: {}, Balance: ${}, Status: {})",
@@ -230,10 +191,10 @@ impl AuthorizationService {
                     account_number,
                     account_type: AccountType::from_str(&account_type_str),
                     balance,
-                    credit_limit,
-                    currency,
+                    credit_limit: Decimal::ZERO,
+                    currency: "USD".to_string(),
                     status: AccountStatus::from_str(&status_str),
-                    max_concurrent_calls: Some(max_concurrent_calls),  // ✅ CORREGIDO
+                    max_concurrent_calls: Some(max_concurrent_calls),
                     created_at,
                     updated_at,
                 }))
@@ -248,7 +209,6 @@ impl AuthorizationService {
     async fn get_rate(&self, destination: &str) -> Result<Option<crate::models::RateCard>, BillingError> {
         let normalized = destination.replace('+', "");
 
-        // Try cache first
         let cache_key = format!("rate:{}", &normalized[..std::cmp::min(10, normalized.len())]);
         if let Ok(Some(cached)) = self.redis.get(&cache_key).await {
             if let Ok(rate) = serde_json::from_str(&cached) {
@@ -256,14 +216,12 @@ impl AuthorizationService {
             }
         }
 
-        // Query database with longest prefix match
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
         
-        // Generate all possible prefixes (descending length)
-        let mut prefixes = Vec::new();
+        let mut prefixes: Vec<String> = Vec::new();
         for i in (1..=normalized.len()).rev() {
-            prefixes.push(&normalized[..i]);
+            prefixes.push(normalized[..i].to_string());
         }
         info!("🔎 Generated prefixes for {}: {:?}", normalized, prefixes);
 
@@ -271,9 +229,7 @@ impl AuthorizationService {
             .query_opt(
                 "SELECT id, destination_prefix, destination_name, rate_per_minute,
                         billing_increment, connection_fee, 
-                        effective_start AT TIME ZONE 'UTC', 
-                        effective_end AT TIME ZONE 'UTC', 
-                        priority
+                        effective_start, effective_end, priority
                 FROM rate_cards
                 WHERE destination_prefix = ANY($1)
                 AND effective_start <= NOW()
@@ -282,7 +238,11 @@ impl AuthorizationService {
                 LIMIT 1",
                 &[&prefixes],
             )
-            .await?;
+            .await
+            .map_err(|e| {
+                error!("❌ Database error getting rate: {:?}", e);
+                BillingError::Database(e)
+            })?;
 
         match row {
             Some(r) => {
@@ -293,14 +253,18 @@ impl AuthorizationService {
                     rate_per_minute: r.get(3),
                     billing_increment: r.get(4),
                     connection_fee: r.get(5),
-                    effective_start: r.get(6),
-                    effective_end: r.get(7),
+                    effective_start: r.get(6),  // Ya es TIMESTAMPTZ
+                    effective_end: r.get(7),    // Ya es TIMESTAMPTZ
                     priority: r.get(8),
                 };
 
-                // Cache result
+                info!(
+                    "✅ Rate card loaded: {} (${}/min, {} sec increment, priority {})",
+                    rate.destination_name, rate.rate_per_minute, rate.billing_increment, rate.priority
+                );
+
                 if let Ok(json) = serde_json::to_string(&rate) {
-                    let _ = self.redis.set(&cache_key, &json, 300).await; // 5 min TTL
+                    let _ = self.redis.set(&cache_key, &json, 300).await;
                 }
 
                 Ok(Some(rate))
@@ -308,5 +272,4 @@ impl AuthorizationService {
             None => Ok(None),
         }
     }
-
 }

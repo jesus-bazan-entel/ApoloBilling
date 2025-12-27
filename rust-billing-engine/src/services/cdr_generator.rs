@@ -5,6 +5,8 @@ use crate::models::ConsumeReservationRequest;
 use crate::error::BillingError;
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
+use chrono::NaiveDateTime;
+
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use tracing::{info, warn, error};
@@ -64,7 +66,7 @@ impl CdrGenerator {
             })?;
 
         let (account_id, rate_per_minute, cost) = if let Some(row) = reservation_row {
-            let account_id: i64 = row.try_get(0).map_err(|e| {
+            let account_id: i32 = row.try_get(0).map_err(|e| {
                 error!("❌ Error getting account_id: {}", e);
                 BillingError::Internal(format!("Column 0 error: {}", e))
             })?;
@@ -99,43 +101,41 @@ impl CdrGenerator {
             (None, None, None)
         };
 
-        // Insert CDR - maneja casos con y sin account_id
-        let cdr_id: i64 = client
+        let start_time: NaiveDateTime = event.start_time.naive_utc();
+        let answer_time: Option<NaiveDateTime> =
+            event.answer_time.map(|t| t.naive_utc());
+        let end_time: NaiveDateTime = event.end_time.naive_utc();
+        
+        // Insert CDR - compatible con esquema actual
+        // Usa CAST para convertir UUID string a tipo UUID
+        let row = client
             .query_one(
-                "INSERT INTO cdrs 
+                "INSERT INTO cdrs
                  (uuid, account_id, caller, callee, start_time, answer_time, end_time,
                   duration, billsec, hangup_cause, rate_applied, cost, direction, freeswitch_server_id)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7,
+                         $8, $9, $10, $11, $12, $13, $14)
                  RETURNING id",
                 &[
-                    &event.uuid,                    // $1
-                    &account_id,                    // $2 - puede ser NULL
-                    &event.caller,                  // $3
-                    &event.callee,                  // $4
-                    &event.start_time,              // $5
-                    &event.answer_time,             // $6
-                    &event.end_time,                // $7
-                    &event.duration,                // $8
-                    &event.billsec,                 // $9
-                    &event.hangup_cause,            // $10
-                    &rate_per_minute,               // $11 - puede ser NULL
-                    &cost,                          // $12 - puede ser NULL
-                    &event.direction,               // $13
-                    &event.server_id,               // $14
+                    &event.uuid,
+                    &account_id,
+                    &event.caller,
+                    &event.callee,
+                    &start_time,
+                    &answer_time,
+                    &end_time,
+                    &event.duration,
+                    &event.billsec,
+                    &event.hangup_cause,
+                    &rate_per_minute,
+                    &cost,
+                    &event.direction,
+                    &event.server_id,
                 ],
             )
-            .await
-            .map_err(|e| {
-                error!("❌ Failed to insert CDR: {}", e);
-                error!("   UUID: {}", event.uuid);
-                error!("   Account ID: {:?}", account_id);
-                error!("   Caller: {}", event.caller);
-                error!("   Callee: {}", event.callee);
-                error!("   Duration: {}s", event.duration);
-                error!("   Billsec: {}s", event.billsec);
-                BillingError::Database(e)
-            })?
-            .get(0);
+            .await?;
+        
+        let cdr_id: i64 = row.get("id");
 
         // Consume reservation if exists
         if account_id.is_some() && cost.is_some() {

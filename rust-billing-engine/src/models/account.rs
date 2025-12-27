@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
-    pub id: i64,
+    pub id: i32,  // PostgreSQL integer = i32, not i64
     pub account_number: String,
     pub account_type: AccountType,
     pub balance: Decimal,

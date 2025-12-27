@@ -4,7 +4,7 @@ use crate::database::DbPool;
 use crate::cache::RedisClient;
 use crate::error::BillingError;
 use rust_decimal::Decimal;
-use rust_decimal::prelude::{ToPrimitive, FromPrimitive}; // Added for to_f64, from_f64, to_i32
+use rust_decimal::prelude::{ToPrimitive, FromPrimitive};
 use uuid::Uuid;
 use chrono::{Utc, Duration, NaiveDateTime}; 
 use tracing::{info, warn, error};
@@ -16,7 +16,6 @@ const MIN_RESERVATION_AMOUNT: f64 = 0.30;
 const MAX_RESERVATION_AMOUNT: f64 = 30.00;
 const RESERVATION_TTL: i64 = 2700; // 45 minutes
 const MAX_CONCURRENT_CALLS: i32 = 5;
-// const TOTAL_RESERVED_LIMIT_PERCENT: i32 = 85; // Unused warning
 
 pub struct ReservationResult {
     pub success: bool,
@@ -24,6 +23,13 @@ pub struct ReservationResult {
     pub reservation_id: Uuid,
     pub reserved_amount: f64,
     pub max_duration_seconds: i32,
+}
+
+pub struct ExtensionResult {
+    pub success: bool,
+    pub reason: String,
+    pub additional_reserved: f64,
+    pub new_max_duration_seconds: i32,
 }
 
 pub struct ReservationManager {
@@ -84,52 +90,64 @@ impl ReservationManager {
                 max_duration_seconds: 0,
             });
         }
-
-        // Create reservation in database
+        
         let reservation_id = Uuid::new_v4();
         let expires_at = Utc::now() + Duration::seconds(RESERVATION_TTL);
-
+        let expires_at_naive = expires_at.naive_utc();
+        
+        let account_id_i32 = account_id as i32;
+        let dest_prefix = &destination[..std::cmp::min(10, destination.len())];
+    
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
         
-        // ✅ SOLUCIÓN: Convertir DateTime<Utc> a NaiveDateTime
-        let expires_at_naive = expires_at.naive_utc();
+        let reserved_f64 = total_reservation.to_f64().unwrap_or(0.0);
+        let rate_f64 = rate_per_minute.to_f64().unwrap_or(0.0);
+        
+        // ✅ SOLUCIÓN: Usar simple_query con valores escapados manualmente
+        // Sanitizar el call_uuid y dest_prefix para evitar SQL injection
+        let call_uuid_safe = call_uuid.replace("'", "''");
+        let dest_prefix_safe = dest_prefix.replace("'", "''");
+        
+        let query = format!(
+            "INSERT INTO balance_reservations 
+            (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
+            status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
+            expires_at, created_by)
+            VALUES ('{}', {}, '{}', {}::NUMERIC(12,4), 0.0000::NUMERIC(12,4), 0.0000::NUMERIC(12,4), 
+            'active'::reservation_status, 'initial'::reservation_type, '{}', {}::NUMERIC(10,6), {}, 
+            '{}'::TIMESTAMP, 'system')",
+            reservation_id,
+            account_id_i32,
+            call_uuid_safe,
+            reserved_f64,
+            dest_prefix_safe,
+            rate_f64,
+            INITIAL_RESERVATION_MINUTES,
+            expires_at_naive.format("%Y-%m-%d %H:%M:%S%.f")
+        );
+        
+        info!("🔍 Executing query: {}", &query[..200]); // Log primeros 200 chars
         
         client
-            .execute(
-                "INSERT INTO balance_reservations 
-                (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
-                status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
-                expires_at, created_by)
-                VALUES ($1, $2, $3, $4, 0, 0, $5, $6, $7, $8, $9, $10, 'system')",
-                &[
-                    &reservation_id,
-                    &account_id,
-                    &call_uuid,
-                    &total_reservation,
-                    &"active",
-                    &"initial",
-                    &String::from(&destination[..std::cmp::min(10, destination.len())]),
-                    &rate_per_minute,
-                    &INITIAL_RESERVATION_MINUTES,
-                    &expires_at_naive,  // ✅ Usar naive_utc() en lugar de expires_at directamente
-                ],
-            )
+            .simple_query(&query)
             .await
             .map_err(|e| {
                 error!("❌ Failed to insert reservation: {}", e);
                 BillingError::Database(e)
             })?;
-
+    
+        info!("✅ Reservation inserted successfully");
+    
         // Cache in Redis
         let cache_data = serde_json::json!({
             "account_id": account_id,
             "call_uuid": call_uuid,
-            "reserved_amount": total_reservation.to_f64().unwrap(),
+            "reserved_amount": reserved_f64,
             "status": "active",
-            "rate_per_minute": rate_per_minute.to_f64().unwrap(),
+            "rate_per_minute": rate_f64,
         });
-
+    
         self.redis
             .set(
                 &format!("reservation:{}", reservation_id),
@@ -138,28 +156,26 @@ impl ReservationManager {
             )
             .await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
-
-        // Add to active reservations set
+    
         self.redis
             .sadd(&format!("active_reservations:{}", account_id), &reservation_id.to_string())
             .await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
-
-        // Calculate max duration
+    
         let max_duration_seconds = ((total_reservation / rate_per_minute) * Decimal::from(60))
             .to_i32()
             .unwrap_or(0);
-
+    
         info!(
             "✅ Reservation created: {} for account {}. Amount: ${}, Max duration: {}s",
-            reservation_id, account_id, total_reservation, max_duration_seconds
+            reservation_id, account_id, reserved_f64, max_duration_seconds
         );
-
+    
         Ok(ReservationResult {
             success: true,
             reason: "created".to_string(),
             reservation_id,
-            reserved_amount: total_reservation.to_f64().unwrap(),
+            reserved_amount: reserved_f64,
             max_duration_seconds,
         })
     }
@@ -190,7 +206,10 @@ impl ReservationManager {
             return Err(BillingError::ReservationFailed("No active reservations".to_string()));
         }
 
-        let account_id: i64 = rows[0].get(1);
+        let first_row = &rows[0];
+        let account_id_i32: i32 = first_row.get(1);
+        let account_id: i64 = account_id_i32 as i64;
+
         let mut total_reserved = Decimal::ZERO;
         
         for row in &rows {
@@ -235,11 +254,13 @@ impl ReservationManager {
     }
 
     async fn get_available_balance(&self, account_id: i64) -> Result<Decimal, BillingError> {
+        let account_id_i32 = account_id as i32;
+        
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
         
         let balance_row = client
-            .query_one("SELECT balance FROM accounts WHERE id = $1", &[&account_id])
+            .query_one("SELECT balance FROM accounts WHERE id = $1", &[&account_id_i32])
             .await?;
         let balance: Decimal = balance_row.get(0);
 
@@ -248,7 +269,7 @@ impl ReservationManager {
                 "SELECT COALESCE(SUM(reserved_amount - consumed_amount), 0)
                  FROM balance_reservations
                  WHERE account_id = $1 AND status = 'active'",
-                &[&account_id],
+                &[&account_id_i32],
             )
             .await?;
         let total_reserved: Decimal = reserved_row.get(0);
@@ -277,6 +298,7 @@ impl ReservationManager {
         account_id: i64,
         call_uuid: &str,
     ) -> Result<(), BillingError> {
+        let account_id_i32 = account_id as i32;
         let mut remaining = actual_cost;
 
         // Consume FIFO
@@ -313,7 +335,7 @@ impl ReservationManager {
         client
             .execute(
                 "UPDATE accounts SET balance = balance - $1, updated_at = NOW() WHERE id = $2",
-                &[&actual_cost, &account_id],
+                &[&actual_cost, &account_id_i32],
             )
             .await?;
 
@@ -325,7 +347,7 @@ impl ReservationManager {
                  SELECT $1, $2, balance + $2, balance, 'reservation_consume', $3, $4
                  FROM accounts WHERE id = $1",
                 &[
-                    &account_id,
+                    &account_id_i32,
                     &(-actual_cost),
                     &format!("Consumed reservation for call {}", call_uuid),
                     &call_uuid,
@@ -345,6 +367,8 @@ impl ReservationManager {
         account_id: i64,
         call_uuid: &str,
     ) -> Result<(), BillingError> {
+        let account_id_i32 = account_id as i32;
+        
         // Mark all as fully consumed
         for row in rows {
             let reservation_id: Uuid = row.get(0);
@@ -366,7 +390,7 @@ impl ReservationManager {
         client
             .execute(
                 "UPDATE accounts SET balance = balance - $1, updated_at = NOW() WHERE id = $2",
-                &[&actual_cost, &account_id],
+                &[&actual_cost, &account_id_i32],
             )
             .await?;
 
@@ -380,7 +404,7 @@ impl ReservationManager {
                  SELECT $1, $2, balance + $2, balance, 'reservation_consume', $3, $4
                  FROM accounts WHERE id = $1",
                 &[
-                    &account_id,
+                    &account_id_i32,
                     &(-actual_cost),
                     &format!("DEFICIT: Consumed ${} reserved + ${} deficit for call {}", total_reserved, deficit, call_uuid),
                     &call_uuid,
@@ -394,5 +418,158 @@ impl ReservationManager {
         );
 
         Ok(())
+    }
+
+    /// Extend an existing reservation when call is approaching max duration
+    pub async fn extend_reservation(
+        &self,
+        call_uuid: &str,
+        additional_minutes: i32,
+    ) -> Result<ExtensionResult, BillingError> {
+        info!("🔄 Attempting to extend reservation for call: {}", call_uuid);
+
+        let client = self.db_pool.get().await
+            .map_err(|e| BillingError::Internal(e.to_string()))?;
+        
+        let rows = client
+            .query(
+                "SELECT id, account_id, rate_per_minute, reserved_amount, consumed_amount
+                 FROM balance_reservations
+                 WHERE call_uuid = $1 AND status = 'active'
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                &[&call_uuid],
+            )
+            .await?;
+
+        if rows.is_empty() {
+            warn!("❌ No active reservation found for call: {}", call_uuid);
+            return Ok(ExtensionResult {
+                success: false,
+                reason: "no_active_reservation".to_string(),
+                additional_reserved: 0.0,
+                new_max_duration_seconds: 0,
+            });
+        }
+
+        let row = &rows[0];
+        let reservation_id: Uuid = row.get(0);
+        let account_id: i64 = row.get(1);
+        let rate_per_minute: Decimal = row.get(2);
+        let current_reserved: Decimal = row.get(3);
+        let consumed: Decimal = row.get(4);
+
+        // Calculate extension amount
+        let base_amount = rate_per_minute * Decimal::from(additional_minutes);
+        let buffer = base_amount * Decimal::from(RESERVATION_BUFFER_PERCENT) / Decimal::from(100);
+        let mut extension_amount = base_amount + buffer;
+
+        extension_amount = extension_amount.max(Decimal::from_f64(MIN_RESERVATION_AMOUNT).unwrap());
+        extension_amount = extension_amount.min(Decimal::from_f64(MAX_RESERVATION_AMOUNT).unwrap());
+
+        info!(
+            "Extension calculation: base=${}, buffer=${} ({}%), total=${}",
+            base_amount, buffer, RESERVATION_BUFFER_PERCENT, extension_amount
+        );
+
+        let available_balance = self.get_available_balance(account_id).await?;
+
+        if available_balance < extension_amount {
+            warn!(
+                "❌ Insufficient balance for extension: required ${}, available ${}",
+                extension_amount, available_balance
+            );
+            return Ok(ExtensionResult {
+                success: false,
+                reason: "insufficient_balance".to_string(),
+                additional_reserved: 0.0,
+                new_max_duration_seconds: 0,
+            });
+        }
+
+        let extension_id = Uuid::new_v4();
+        let expires_at = Utc::now() + Duration::seconds(RESERVATION_TTL);
+        let expires_at_naive = expires_at.naive_utc();
+
+        let dest_row = client
+            .query_one(
+                "SELECT destination_prefix FROM balance_reservations WHERE id = $1",
+                &[&reservation_id],
+            )
+            .await?;
+        let destination_prefix: String = dest_row.get(0);
+
+        let account_id_i32 = account_id as i32;
+        let call_uuid_str = call_uuid.to_string();
+        
+        // ✅ SOLUCIÓN: Usar Decimal::ZERO aquí también
+        client
+            .execute(
+                "INSERT INTO balance_reservations 
+                (id, account_id, call_uuid, reserved_amount, consumed_amount, released_amount,
+                status, reservation_type, destination_prefix, rate_per_minute, reserved_minutes,
+                expires_at, created_by)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::reservation_status, $8::reservation_type, $9, $10, $11, $12, $13)",
+                &[
+                    &extension_id,
+                    &account_id_i32,
+                    &call_uuid_str,
+                    &extension_amount,
+                    &Decimal::ZERO,        // ✅ consumed_amount
+                    &Decimal::ZERO,        // ✅ released_amount
+                    &"active",
+                    &"extension",
+                    &destination_prefix,
+                    &rate_per_minute,
+                    &additional_minutes,
+                    &expires_at_naive,
+                    &"system_extension",
+                ],
+            )
+            .await
+            .map_err(|e| {
+                error!("❌ Failed to insert extension reservation: {}", e);
+                BillingError::Database(e)
+            })?;
+
+        let cache_data = serde_json::json!({
+            "account_id": account_id,
+            "call_uuid": call_uuid,
+            "reserved_amount": extension_amount.to_f64().unwrap(),
+            "status": "active",
+            "rate_per_minute": rate_per_minute.to_f64().unwrap(),
+            "type": "extension",
+        });
+
+        self.redis
+            .set(
+                &format!("reservation:{}", extension_id),
+                &cache_data.to_string(),
+                RESERVATION_TTL as usize,
+            )
+            .await
+            .map_err(|e| BillingError::Internal(e.to_string()))?;
+
+        self.redis
+            .sadd(&format!("active_reservations:{}", account_id), &extension_id.to_string())
+            .await
+            .map_err(|e| BillingError::Internal(e.to_string()))?;
+
+        let total_reserved = current_reserved + extension_amount - consumed;
+        let new_max_duration_seconds = ((total_reserved / rate_per_minute) * Decimal::from(60))
+            .to_i32()
+            .unwrap_or(0);
+
+        info!(
+            "✅ Reservation extended: {} for call {}. Extension: ${}, New max duration: {}s",
+            extension_id, call_uuid, extension_amount, new_max_duration_seconds
+        );
+
+        Ok(ExtensionResult {
+            success: true,
+            reason: "extended".to_string(),
+            additional_reserved: extension_amount.to_f64().unwrap(),
+            new_max_duration_seconds,
+        })
     }
 }

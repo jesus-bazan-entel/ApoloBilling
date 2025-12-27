@@ -1,7 +1,7 @@
 // src/esl/event_handler.rs
 use crate::services::{AuthorizationService, RealtimeBiller, CdrGenerator};
 use crate::models::AuthRequest;
-use crate::esl::event::EslEvent;
+use crate::esl::{event::EslEvent, connection::EslConnection};
 use crate::database::DbPool;
 use crate::cache::RedisClient;
 use std::sync::Arc;
@@ -13,8 +13,9 @@ pub struct EventHandler {
     auth_service: Arc<AuthorizationService>,
     realtime_biller: Arc<RealtimeBiller>,
     cdr_generator: Arc<CdrGenerator>,
-    db_pool: DbPool,  // ✅ Agregado
-    redis: RedisClient,  // ✅ Agregado
+    db_pool: DbPool,
+    redis: RedisClient,
+    connection: Option<Arc<EslConnection>>,  // Optional for server mode
 }
 
 impl EventHandler {
@@ -23,8 +24,9 @@ impl EventHandler {
         auth_service: Arc<AuthorizationService>,
         realtime_biller: Arc<RealtimeBiller>,
         cdr_generator: Arc<CdrGenerator>,
-        db_pool: DbPool,  // ✅ Agregado
-        redis: RedisClient,  // ✅ Agregado
+        db_pool: DbPool,
+        redis: RedisClient,
+        connection: Arc<EslConnection>,
     ) -> Self {
         Self {
             server_id,
@@ -33,10 +35,29 @@ impl EventHandler {
             cdr_generator,
             db_pool,
             redis,
+            connection: Some(connection),
         }
     }
 
-    pub async fn handle_event(&self, event: &EslEvent) {
+    pub fn new_server_mode(
+        auth_service: Arc<AuthorizationService>,
+        realtime_biller: Arc<RealtimeBiller>,
+        cdr_generator: Arc<CdrGenerator>,
+        db_pool: DbPool,
+        redis: RedisClient,
+    ) -> Self {
+        Self {
+            server_id: "esl-server".to_string(),
+            auth_service,
+            realtime_biller,
+            cdr_generator,
+            db_pool,
+            redis,
+            connection: None,  // No connection in server mode
+        }
+    }
+
+    pub async fn handle_event(&self, event: &EslEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(event_name) = event.event_name() {
             match event_name.as_str() {
                 "CHANNEL_CREATE" => self.handle_channel_create(event).await,
@@ -45,6 +66,7 @@ impl EventHandler {
                 _ => {}
             }
         }
+        Ok(())
     }
 
     async fn handle_channel_create(&self, event: &EslEvent) {
@@ -70,9 +92,21 @@ impl EventHandler {
                 if !response.authorized {
                     warn!("❌ Call DENIED: {} - Reason: {}", uuid, response.reason);
                     
-                    // TODO: Send uuid_kill command to FreeSWITCH
-                    // Requires keeping connection in shared state
-                    // For now, FreeSWITCH will handle based on dialplan
+                    // Send uuid_kill command to FreeSWITCH (if connection available)
+                    if let Some(conn) = &self.connection {
+                        let kill_command = format!("api uuid_kill {} CALL_REJECTED\n\n", uuid);
+                        match conn.send_command(&kill_command).await {
+                            Ok(result) => {
+                                info!("🔪 Sent kill command for call {}: {}", uuid, result.trim());
+                            }
+                            Err(e) => {
+                                error!("❌ Failed to send kill command for call {}: {}", uuid, e);
+                            }
+                        }
+                    } else {
+                        info!("📝 Call denied but no connection to send kill command (server mode)");
+                    }
+
                 } else {
                     info!("✅ Call AUTHORIZED: {}", uuid);
                 }
@@ -145,9 +179,9 @@ impl EventHandler {
             uuid: uuid.clone(),
             caller,
             callee,
-            start_time: Utc::now(), // TODO: Parse from event
-            answer_time: None, // TODO: Parse from event
-            end_time: Utc::now(),
+            start_time: event.start_time().unwrap_or_else(Utc::now),  // ✅ Parse from event
+            answer_time: event.answer_time(),  // ✅ Parse from event
+            end_time: event.end_time().unwrap_or_else(Utc::now),  // ✅ Parse from event
             duration,
             billsec,
             hangup_cause,
