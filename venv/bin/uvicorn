@@ -1,4 +1,4 @@
-#!/home/jbazan/ApoloBilling/TarificadorFreeswitch/venv/bin/python3
+#!/home/jbazan/ApoloBilling/venv/bin/python3.11
 import sys
 from uvicorn.main import main
 if __name__ == '__main__':

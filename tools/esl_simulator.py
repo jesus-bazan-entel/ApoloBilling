@@ -107,8 +107,8 @@ class ESLSimulator:
     def simulate_call_flow(
         self,
         caller: str = "100001",
-        callee: str = "51987654321",
-        duration: int = 60,
+        callee: str = "51983434724",
+        duration: int = 30,
         account_id: str = "100001"
     ):
         """

@@ -1,4 +1,4 @@
-#!/home/jbazan/ApoloBilling/TarificadorFreeswitch/venv/bin/python
+#!/home/jbazan/ApoloBilling/venv/bin/python3.11
 # -*- coding: utf-8 -*-
 import re
 import sys

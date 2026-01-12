@@ -1,4 +1,4 @@
-#!/home/jbazan/ApoloBilling/TarificadorFreeswitch/venv/bin/python3
+#!/home/jbazan/ApoloBilling/venv/bin/python3.11
 import sys
 from dotenv.__main__ import cli
 if __name__ == '__main__':
