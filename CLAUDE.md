@@ -193,6 +193,133 @@ Rates use Longest Prefix Match (LPM) on `destination_prefix`. The most specific 
 
 ---
 
+# GIT Y GITHUB
+
+## Verificar Estado de Cambios
+
+```bash
+# Ver estado actual
+git status
+
+# Ver resumen de cambios
+git diff --stat
+
+# Ver commits locales pendientes de push
+git log origin/main..HEAD --oneline
+```
+
+## Proceso para Subir Cambios a GitHub
+
+### Paso 1: Agregar archivos al staging
+
+```bash
+# Opción A: Agregar todos los cambios
+git add .
+
+# Opción B: Agregar selectivamente por directorio
+git add frontend/
+git add rust-backend/
+git add .claude/
+git add CLAUDE.md
+
+# Opción C: Agregar archivos específicos
+git add archivo1.ts archivo2.rs
+```
+
+### Paso 2: Crear commit
+
+```bash
+# Commit simple
+git commit -m "descripción del cambio"
+
+# Commit con mensaje multilínea (recomendado)
+git commit -m "$(cat <<'EOF'
+feat: Descripción corta del cambio
+
+- Detalle 1 de los cambios realizados
+- Detalle 2 de los cambios realizados
+- Detalle 3 de los cambios realizados
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
+```
+
+### Paso 3: Subir a GitHub
+
+```bash
+# Push a la rama main
+git push origin main
+
+# Si es la primera vez o hay problemas
+git push -u origin main
+```
+
+## Convenciones de Commits
+
+| Prefijo | Uso |
+|---------|-----|
+| `feat:` | Nueva funcionalidad |
+| `fix:` | Corrección de bug |
+| `docs:` | Cambios en documentación |
+| `refactor:` | Refactorización sin cambio funcional |
+| `test:` | Agregar o modificar tests |
+| `chore:` | Tareas de mantenimiento |
+
+## Ejemplo Completo
+
+```bash
+# 1. Verificar cambios
+git status
+
+# 2. Agregar todo
+git add .
+
+# 3. Crear commit descriptivo
+git commit -m "$(cat <<'EOF'
+feat: Migración completa Python → Rust backend
+
+- Migrar endpoints de FastAPI a Actix-web
+- Agregar frontend React + TypeScript + Vite
+- Configurar autenticación JWT con Argon2
+- Agregar skills de Claude Code
+- Actualizar documentación
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
+
+# 4. Subir a GitHub
+git push origin main
+```
+
+## Resolver Conflictos
+
+```bash
+# Si hay cambios remotos, primero hacer pull
+git pull origin main
+
+# Si hay conflictos, resolverlos y luego:
+git add .
+git commit -m "fix: Resolver conflictos de merge"
+git push origin main
+```
+
+## Ver Historial
+
+```bash
+# Ver últimos commits
+git log --oneline -10
+
+# Ver commits con cambios
+git log --stat -5
+
+# Ver diferencias con remote
+git diff origin/main
+```
+
+---
+
 # SKILLS DE CLAUDE CODE
 
 ## Skill: frontend-design
