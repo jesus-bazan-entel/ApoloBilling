@@ -150,12 +150,11 @@ impl AuthorizationService {
         
         let row = client
             .query_opt(
-                "SELECT id, account_number, account_type::text, balance, 
-                        max_concurrent_calls, status::text, 
+                "SELECT id, account_number, account_type::text, balance,
+                        max_concurrent_calls, status::text,
                         created_at, updated_at
                 FROM accounts
                 WHERE (account_number = $1 OR account_number = $2)
-                AND status = 'ACTIVE'
                 LIMIT 1",
                 &[&ani, &normalized],
             )
@@ -246,6 +245,14 @@ impl AuthorizationService {
 
         match row {
             Some(r) => {
+                // Convert NaiveDateTime to DateTime<Utc>
+                let effective_start_naive: NaiveDateTime = r.get(6);
+                let effective_start = Utc.from_utc_datetime(&effective_start_naive);
+
+                let effective_end: Option<DateTime<Utc>> = r.try_get::<_, NaiveDateTime>(7)
+                    .ok()
+                    .map(|naive| Utc.from_utc_datetime(&naive));
+
                 let rate = crate::models::RateCard {
                     id: r.get(0),
                     destination_prefix: r.get(1),
@@ -253,8 +260,8 @@ impl AuthorizationService {
                     rate_per_minute: r.get(3),
                     billing_increment: r.get(4),
                     connection_fee: r.get(5),
-                    effective_start: r.get(6),  // Ya es TIMESTAMPTZ
-                    effective_end: r.get(7),    // Ya es TIMESTAMPTZ
+                    effective_start,
+                    effective_end,
                     priority: r.get(8),
                 };
 
