@@ -59,14 +59,18 @@ pub async fn list_cdrs(
         query.callee
     );
 
+    // Parse date filters
+    let start_date = parse_optional_date(&query.start_date);
+    let end_date = parse_optional_date(&query.end_date);
+
     // Query with filters
     let (cdrs, total) = repo
         .list_filtered(
             query.account_id,
             query.caller.as_deref(),
             query.callee.as_deref(),
-            query.start_date,
-            query.end_date,
+            start_date,
+            end_date,
             query.pagination.limit(),
             query.pagination.offset(),
         )
@@ -628,6 +632,28 @@ fn get_period_key(dt: &DateTime<Utc>, group_by: StatsGroupBy) -> (String, DateTi
             (key, start)
         }
     }
+}
+
+/// Parse optional date string to DateTime<Utc>
+fn parse_optional_date(date_str: &Option<String>) -> Option<DateTime<Utc>> {
+    let s = date_str.as_ref()?;
+    if s.is_empty() {
+        return None;
+    }
+
+    // Try parsing as ISO 8601 (RFC 3339)
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+
+    // Try parsing as simple date (assume start of day UTC)
+    if let Ok(naive) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        if let Some(naive_dt) = naive.and_hms_opt(0, 0, 0) {
+            return Some(DateTime::from_naive_utc_and_offset(naive_dt, Utc));
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]

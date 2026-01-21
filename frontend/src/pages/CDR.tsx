@@ -46,20 +46,20 @@ export default function CDRPage() {
       ),
     },
     {
-      key: 'caller_number',
+      key: 'caller',
       header: 'Origen',
       render: (cdr: CDR) => (
-        <span className="font-mono text-slate-900">{cdr.caller_number}</span>
+        <span className="font-mono text-slate-900">{cdr.caller || cdr.caller_number || '-'}</span>
       ),
     },
     {
-      key: 'callee_number',
+      key: 'callee',
       header: 'Destino',
       render: (cdr: CDR) => (
         <div>
-          <span className="font-mono text-slate-700">{cdr.callee_number}</span>
-          {cdr.zone_name && (
-            <span className="text-xs text-slate-500 block">{cdr.zone_name}</span>
+          <span className="font-mono text-slate-700">{cdr.callee || cdr.callee_number || '-'}</span>
+          {cdr.destination && (
+            <span className="text-xs text-slate-500 block">{cdr.destination}</span>
           )}
         </div>
       ),
@@ -227,9 +227,9 @@ export default function CDRPage() {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
                   type="text"
-                  value={filters.caller_number || ''}
+                  value={filters.caller || ''}
                   onChange={(e) =>
-                    setFilters({ ...filters, caller_number: e.target.value })
+                    setFilters({ ...filters, caller: e.target.value })
                   }
                   placeholder="Ej: 1001"
                   className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -244,9 +244,9 @@ export default function CDRPage() {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
                   type="text"
-                  value={filters.callee_number || ''}
+                  value={filters.callee || ''}
                   onChange={(e) =>
-                    setFilters({ ...filters, callee_number: e.target.value })
+                    setFilters({ ...filters, callee: e.target.value })
                   }
                   placeholder="Ej: 51987654321"
                   className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"

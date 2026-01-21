@@ -36,14 +36,56 @@ impl<T> ApiResponse<T> {
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct PaginationParams {
     /// Page number (1-indexed)
-    #[serde(default = "default_page")]
+    #[serde(default = "default_page", deserialize_with = "deserialize_number_from_string")]
     #[validate(range(min = 1))]
     pub page: i64,
 
     /// Items per page
-    #[serde(default = "default_per_page")]
+    #[serde(default = "default_per_page", deserialize_with = "deserialize_number_from_string")]
     #[validate(range(min = 1, max = 1000))]
     pub per_page: i64,
+}
+
+/// Deserialize a number from either a string or a number
+fn deserialize_number_from_string<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct I64OrStringVisitor;
+
+    impl<'de> Visitor<'de> for I64OrStringVisitor {
+        type Value = i64;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("an integer or a string containing an integer")
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<i64, E>
+        where
+            E: de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<i64, E>
+        where
+            E: de::Error,
+        {
+            Ok(value as i64)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<i64, E>
+        where
+            E: de::Error,
+        {
+            value.parse::<i64>().map_err(de::Error::custom)
+        }
+    }
+
+    deserializer.deserialize_any(I64OrStringVisitor)
 }
 
 fn default_page() -> i64 {

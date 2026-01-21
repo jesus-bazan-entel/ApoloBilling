@@ -24,12 +24,12 @@ pub struct CdrFilterParams {
     pub callee: Option<String>,
 
     /// Filter by minimum start time (ISO 8601)
-    #[serde(deserialize_with = "deserialize_optional_datetime")]
-    pub start_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub start_date: Option<String>,
 
     /// Filter by maximum start time (ISO 8601)
-    #[serde(deserialize_with = "deserialize_optional_datetime")]
-    pub end_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub end_date: Option<String>,
 
     /// Filter by call direction
     pub direction: Option<CdrDirection>,
@@ -55,11 +55,11 @@ pub struct CdrExportParams {
     pub callee: Option<String>,
 
     /// Start date filter
-    #[serde(deserialize_with = "deserialize_optional_datetime")]
+    #[serde(default, deserialize_with = "deserialize_optional_datetime")]
     pub start_date: Option<DateTime<Utc>>,
 
     /// End date filter
-    #[serde(deserialize_with = "deserialize_optional_datetime")]
+    #[serde(default, deserialize_with = "deserialize_optional_datetime")]
     pub end_date: Option<DateTime<Utc>>,
 
     /// Export format
@@ -83,11 +83,11 @@ pub struct StatsParams {
     pub account_id: Option<i32>,
 
     /// Start date for statistics
-    #[serde(deserialize_with = "deserialize_optional_datetime")]
+    #[serde(default, deserialize_with = "deserialize_optional_datetime")]
     pub start_date: Option<DateTime<Utc>>,
 
     /// End date for statistics
-    #[serde(deserialize_with = "deserialize_optional_datetime")]
+    #[serde(default, deserialize_with = "deserialize_optional_datetime")]
     pub end_date: Option<DateTime<Utc>>,
 
     /// Group by period (hour, day, week, month)

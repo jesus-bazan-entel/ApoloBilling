@@ -54,6 +54,10 @@ export const updateAccount = async (id: number, account: Partial<Account>): Prom
   return data.data || data
 }
 
+export const deleteAccount = async (id: number): Promise<void> => {
+  await api.delete(`/accounts/${id}`)
+}
+
 export const topupAccount = async (
   id: number,
   amount: number,
@@ -229,7 +233,9 @@ export interface AuthUser {
 
 export const login = async (credentials: LoginCredentials): Promise<AuthUser> => {
   const { data } = await api.post('/auth/login', credentials)
-  return data.data || data
+  // API returns { data: { access_token, user: {...}, ... } }
+  // Return just the user object to match getCurrentUser format
+  return data.data?.user || data.user || data.data || data
 }
 
 export const logout = async (): Promise<void> => {
@@ -239,7 +245,8 @@ export const logout = async (): Promise<void> => {
 export const getCurrentUser = async (): Promise<AuthUser | null> => {
   try {
     const { data } = await api.get('/auth/me')
-    return data.data || data
+    // API returns { data: { user: {...}, token_expires_at: ... } }
+    return data.data?.user || data.user || data.data || data
   } catch {
     return null
   }

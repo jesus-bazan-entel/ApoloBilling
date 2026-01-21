@@ -187,11 +187,12 @@ async fn main() -> std::io::Result<()> {
             // Configure payload limits for large exports
             .app_data(web::PayloadConfig::new(10 * 1024 * 1024)) // 10MB max payload
             .app_data(web::QueryConfig::default().error_handler(|err, _req| {
+                let error_message = err.to_string();
                 actix_web::error::InternalError::from_response(
                     err,
                     HttpResponse::BadRequest().json(serde_json::json!({
                         "error": "invalid_query",
-                        "message": "Invalid query parameters"
+                        "message": error_message
                     })),
                 )
                 .into()

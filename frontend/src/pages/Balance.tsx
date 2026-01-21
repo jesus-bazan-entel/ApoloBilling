@@ -76,19 +76,22 @@ export default function BalancePage() {
     {
       key: 'balance',
       header: 'Saldo Actual',
-      render: (account: Account) => (
-        <span
-          className={`font-mono font-bold text-lg ${
-            account.balance > 10
-              ? 'text-green-600'
-              : account.balance > 5
-              ? 'text-yellow-600'
-              : 'text-red-600'
-          }`}
-        >
-          ${account.balance.toFixed(2)}
-        </span>
-      ),
+      render: (account: Account) => {
+        const balance = Number(account.balance) || 0
+        return (
+          <span
+            className={`font-mono font-bold text-lg ${
+              balance > 10
+                ? 'text-green-600'
+                : balance > 5
+                ? 'text-yellow-600'
+                : 'text-red-600'
+            }`}
+          >
+            ${balance.toFixed(2)}
+          </span>
+        )
+      },
       className: 'text-right',
     },
     {
@@ -117,10 +120,10 @@ export default function BalancePage() {
   ]
 
   // Summary stats
-  const totalBalance = accounts.reduce((sum: number, a: Account) => sum + a.balance, 0)
-  const activeAccounts = accounts.filter((a: Account) => a.status.toLowerCase() === 'active').length
+  const totalBalance = accounts.reduce((sum: number, a: Account) => sum + (Number(a.balance) || 0), 0)
+  const activeAccounts = accounts.filter((a: Account) => a.status?.toLowerCase() === 'active').length
   const lowBalanceAccounts = accounts.filter(
-    (a: Account) => a.balance < 5 && a.status.toLowerCase() === 'active'
+    (a: Account) => (Number(a.balance) || 0) < 5 && a.status?.toLowerCase() === 'active'
   ).length
 
   return (
@@ -268,7 +271,8 @@ function RechargeModal({
     setAmount(value)
   }
 
-  const newBalance = account.balance + amount
+  const currentBalance = Number(account.balance) || 0
+  const newBalance = currentBalance + amount
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -300,7 +304,7 @@ function RechargeModal({
               <div>
                 <p className="text-sm text-slate-500">Saldo Actual</p>
                 <p className="text-xl font-bold text-slate-900">
-                  ${account.balance.toFixed(2)}
+                  ${currentBalance.toFixed(2)}
                 </p>
               </div>
               {amount > 0 && (

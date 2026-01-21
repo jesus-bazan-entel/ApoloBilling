@@ -51,17 +51,21 @@ export interface RateCard {
 export interface CDR {
   id: number
   call_uuid: string
-  caller_number: string
-  callee_number: string
+  caller: string
+  callee: string
+  caller_number?: string // Alias for compatibility
+  callee_number?: string // Alias for compatibility
   start_time: string
   answer_time?: string
   end_time?: string
   duration: number
   billsec: number
-  total_cost: number
-  cost?: number // Alias for compatibility
+  total_cost?: number
+  cost?: number
+  rate?: number
   hangup_cause?: string
-  direction: 'inbound' | 'outbound' | 'internal'
+  direction: 'inbound' | 'outbound' | 'internal' | string
+  destination?: string
   destination_prefix?: string
   rate_per_minute?: number
   zone_id?: number
@@ -181,8 +185,8 @@ export interface PaginatedResponse<T> {
 export interface CDRFilters {
   start_date?: string
   end_date?: string
-  caller_number?: string
-  callee_number?: string
+  caller?: string
+  callee?: string
   direction?: string
   destination_prefix?: string
   account_id?: number

@@ -1,14 +1,15 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { fetchAccounts, createAccount, updateAccount } from '../api/client'
+import { fetchAccounts, createAccount, updateAccount, deleteAccount } from '../api/client'
 import DataTable from '../components/DataTable'
 import Badge from '../components/Badge'
-import { Users, Plus, Edit, X, DollarSign } from 'lucide-react'
+import { Users, Plus, Edit, X, DollarSign, Trash2, Power, AlertTriangle } from 'lucide-react'
 import type { Account, AccountType, AccountStatus } from '../types'
 
 export default function AccountsPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<Account | null>(null)
   const queryClient = useQueryClient()
 
   const { data: accounts = [], isLoading } = useQuery({
@@ -36,6 +37,24 @@ export default function AccountsPage() {
     },
   })
 
+  const deleteMutation = useMutation({
+    mutationFn: deleteAccount,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['accounts'] })
+      setDeleteConfirm(null)
+    },
+  })
+
+  const toggleStatusMutation = useMutation({
+    mutationFn: ({ id, currentStatus }: { id: number; currentStatus: string }) => {
+      const newStatus = currentStatus?.toLowerCase() === 'active' ? 'suspended' : 'active'
+      return updateAccount(id, { status: newStatus })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['accounts'] })
+    },
+  })
+
   const handleEdit = (account: Account) => {
     setEditingAccount(account)
     setShowModal(true)
@@ -59,57 +78,68 @@ export default function AccountsPage() {
     {
       key: 'account_type',
       header: 'Tipo',
-      render: (acc: Account) => (
-        <Badge variant={acc.account_type === 'PREPAID' ? 'info' : 'warning'}>
-          {acc.account_type === 'PREPAID' ? 'Prepago' : 'Postpago'}
-        </Badge>
-      ),
+      render: (acc: Account) => {
+        const isPrepaid = acc.account_type?.toLowerCase() === 'prepaid'
+        return (
+          <Badge variant={isPrepaid ? 'info' : 'warning'}>
+            {isPrepaid ? 'Prepago' : 'Postpago'}
+          </Badge>
+        )
+      },
     },
     {
       key: 'status',
       header: 'Estado',
-      render: (acc: Account) => (
-        <Badge
-          variant={
-            acc.status === 'ACTIVE'
-              ? 'success'
-              : acc.status === 'SUSPENDED'
-              ? 'warning'
-              : 'error'
-          }
-        >
-          {acc.status === 'ACTIVE'
-            ? 'Activa'
-            : acc.status === 'SUSPENDED'
-            ? 'Suspendida'
-            : 'Cerrada'}
-        </Badge>
-      ),
+      render: (acc: Account) => {
+        const status = acc.status?.toLowerCase()
+        return (
+          <Badge
+            variant={
+              status === 'active'
+                ? 'success'
+                : status === 'suspended'
+                ? 'warning'
+                : 'error'
+            }
+          >
+            {status === 'active'
+              ? 'Activa'
+              : status === 'suspended'
+              ? 'Suspendida'
+              : 'Cerrada'}
+          </Badge>
+        )
+      },
     },
     {
       key: 'balance',
       header: 'Saldo',
-      render: (acc: Account) => (
-        <span
-          className={`font-mono font-bold ${
-            acc.balance > 0 ? 'text-green-600' : 'text-red-600'
-          }`}
-        >
-          ${acc.balance.toFixed(2)}
-        </span>
-      ),
+      render: (acc: Account) => {
+        const balance = Number(acc.balance) || 0
+        return (
+          <span
+            className={`font-mono font-bold ${
+              balance > 0 ? 'text-green-600' : 'text-red-600'
+            }`}
+          >
+            ${balance.toFixed(2)}
+          </span>
+        )
+      },
       className: 'text-right',
     },
     {
       key: 'credit_limit',
       header: 'Límite de Crédito',
-      render: (acc: Account) => (
-        <span className="font-mono text-slate-700">
-          {acc.account_type === 'POSTPAID'
-            ? `$${acc.credit_limit.toFixed(2)}`
-            : '-'}
-        </span>
-      ),
+      render: (acc: Account) => {
+        const isPrepaid = acc.account_type?.toLowerCase() === 'prepaid'
+        const creditLimit = Number(acc.credit_limit) || 0
+        return (
+          <span className="font-mono text-slate-700">
+            {!isPrepaid ? `$${creditLimit.toFixed(2)}` : '-'}
+          </span>
+        )
+      },
       className: 'text-right',
     },
     {
@@ -129,26 +159,53 @@ export default function AccountsPage() {
     {
       key: 'actions',
       header: 'Acciones',
-      render: (acc: Account) => (
-        <button
-          onClick={() => handleEdit(acc)}
-          className="text-blue-600 hover:text-blue-700 flex items-center"
-        >
-          <Edit className="w-4 h-4 mr-1" />
-          Editar
-        </button>
-      ),
+      render: (acc: Account) => {
+        const isActive = acc.status?.toLowerCase() === 'active'
+        const isToggling = toggleStatusMutation.isPending
+        return (
+          <div className="flex items-center gap-1">
+            {/* Editar */}
+            <button
+              onClick={() => handleEdit(acc)}
+              className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+              title="Editar cuenta"
+            >
+              <Edit className="w-4 h-4" />
+            </button>
+
+            {/* Activar/Desactivar */}
+            <button
+              onClick={() => toggleStatusMutation.mutate({ id: acc.id, currentStatus: acc.status })}
+              disabled={isToggling}
+              className={`p-1.5 rounded transition-colors ${
+                isActive
+                  ? 'text-slate-500 hover:text-amber-600 hover:bg-amber-50'
+                  : 'text-amber-600 hover:text-green-600 hover:bg-green-50'
+              }`}
+              title={isActive ? 'Suspender cuenta' : 'Activar cuenta'}
+            >
+              <Power className="w-4 h-4" />
+            </button>
+
+            {/* Eliminar */}
+            <button
+              onClick={() => setDeleteConfirm(acc)}
+              className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+              title="Eliminar cuenta"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        )
+      },
     },
   ]
 
   // Summary stats
-  const totalBalance = accounts.reduce((sum, acc) => sum + acc.balance, 0)
-  const activeAccounts = accounts.filter((acc) => acc.status === 'ACTIVE').length
-  const prepaidAccounts = accounts.filter((acc) => acc.account_type === 'PREPAID')
-    .length
-  const postpaidAccounts = accounts.filter(
-    (acc) => acc.account_type === 'POSTPAID'
-  ).length
+  const totalBalance = accounts.reduce((sum, acc) => sum + (Number(acc.balance) || 0), 0)
+  const activeAccounts = accounts.filter((acc) => acc.status?.toLowerCase() === 'active').length
+  const prepaidAccounts = accounts.filter((acc) => acc.account_type?.toLowerCase() === 'prepaid').length
+  const postpaidAccounts = accounts.filter((acc) => acc.account_type?.toLowerCase() === 'postpaid').length
 
   return (
     <div className="space-y-6">
@@ -242,6 +299,64 @@ export default function AccountsPage() {
           isLoading={createMutation.isPending || updateMutation.isPending}
         />
       )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center">
+                  <AlertTriangle className="w-6 h-6 text-red-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Eliminar Cuenta</h3>
+                  <p className="text-sm text-slate-500">Esta acción no se puede deshacer</p>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 rounded-lg p-4 mb-4">
+                <p className="text-sm text-slate-600">
+                  ¿Estás seguro de eliminar la cuenta{' '}
+                  <span className="font-mono font-bold text-slate-900">
+                    {deleteConfirm.account_number}
+                  </span>
+                  ?
+                </p>
+                {Number(deleteConfirm.balance) > 0 && (
+                  <p className="text-sm text-amber-600 mt-2">
+                    <strong>Advertencia:</strong> Esta cuenta tiene un saldo de $
+                    {Number(deleteConfirm.balance).toFixed(2)}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setDeleteConfirm(null)}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => deleteMutation.mutate(deleteConfirm.id)}
+                  disabled={deleteMutation.isPending}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+                >
+                  {deleteMutation.isPending ? (
+                    'Eliminando...'
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      Eliminar
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -254,18 +369,35 @@ interface AccountModalProps {
 }
 
 function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalProps) {
-  const [formData, setFormData] = useState<Partial<Account>>({
+  const isEditing = !!account
+  const [formData, setFormData] = useState({
     account_number: account?.account_number || '',
-    account_type: account?.account_type || 'PREPAID',
-    balance: account?.balance || 0,
-    credit_limit: account?.credit_limit || 0,
-    status: account?.status || 'ACTIVE',
+    account_type: account?.account_type?.toLowerCase() || 'prepaid',
+    initial_balance: 0, // Solo para crear - backend usa initial_balance
+    credit_limit: Number(account?.credit_limit) || 0,
+    status: account?.status?.toLowerCase() || 'active',
     max_concurrent_calls: account?.max_concurrent_calls || 5,
   })
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    onSubmit(formData)
+    if (isEditing) {
+      // Solo enviar campos que se pueden editar
+      onSubmit({
+        status: formData.status,
+        credit_limit: formData.credit_limit,
+        max_concurrent_calls: formData.max_concurrent_calls,
+      })
+    } else {
+      // Crear con initial_balance
+      onSubmit({
+        account_number: formData.account_number,
+        account_type: formData.account_type,
+        initial_balance: formData.initial_balance,
+        credit_limit: formData.credit_limit,
+        max_concurrent_calls: formData.max_concurrent_calls,
+      } as Partial<Account>)
+    }
   }
 
   return (
@@ -306,7 +438,7 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
                 Tipo de Cuenta *
               </label>
               <select
-                value={formData.account_type}
+                value={formData.account_type?.toLowerCase()}
                 onChange={(e) =>
                   setFormData({
                     ...formData,
@@ -316,29 +448,43 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
                 disabled={!!account}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100"
               >
-                <option value="PREPAID">Prepago</option>
-                <option value="POSTPAID">Postpago</option>
+                <option value="prepaid">Prepago</option>
+                <option value="postpaid">Postpago</option>
               </select>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Saldo Inicial *
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                required
-                value={formData.balance}
-                onChange={(e) =>
-                  setFormData({
-                    ...formData,
-                    balance: parseFloat(e.target.value) || 0,
-                  })
-                }
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
+            {!isEditing ? (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Saldo Inicial
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.initial_balance}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      initial_balance: parseFloat(e.target.value) || 0,
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Saldo Actual
+                </label>
+                <div className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-slate-50 text-slate-700 font-mono">
+                  ${Number(account?.balance || 0).toFixed(2)}
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Para modificar el saldo, usa la opción "Recargar" en Gestión de Saldos
+                </p>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -354,7 +500,7 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
                     credit_limit: parseFloat(e.target.value) || 0,
                   })
                 }
-                disabled={formData.account_type === 'PREPAID'}
+                disabled={formData.account_type?.toLowerCase() === 'prepaid'}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100"
               />
             </div>
@@ -364,7 +510,7 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
                 Estado
               </label>
               <select
-                value={formData.status}
+                value={formData.status?.toLowerCase()}
                 onChange={(e) =>
                   setFormData({
                     ...formData,
@@ -373,9 +519,9 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
                 }
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               >
-                <option value="ACTIVE">Activa</option>
-                <option value="SUSPENDED">Suspendida</option>
-                <option value="CLOSED">Cerrada</option>
+                <option value="active">Activa</option>
+                <option value="suspended">Suspendida</option>
+                <option value="closed">Cerrada</option>
               </select>
             </div>
 
