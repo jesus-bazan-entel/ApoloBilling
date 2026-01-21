@@ -75,16 +75,35 @@ impl EventHandler {
             None => return,
         };
 
+        // 🔍 Detectar si es a-leg o b-leg (solo procesar a-leg para evitar duplicados)
+        let call_direction = event.get_header("Caller-Logical-Direction")
+            .or_else(|| event.get_header("variable_leg"))
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
+
+        // Solo procesar el a-leg (origen de la llamada)
+        if call_direction == "leg_b" || call_direction == "outbound" && event.get_header("Other-Leg-Unique-ID").is_some() {
+            info!("⏭️  Skipping b-leg: {} (direction: {})", uuid, call_direction);
+            return;
+        }
+
         let caller = event.caller().cloned().unwrap_or_default();
         let callee = event.callee().cloned().unwrap_or_default();
 
-        info!("📞 CHANNEL_CREATE: {} - {} → {}", uuid, caller, callee);
+        // 🔍 Detectar dirección de la llamada (inbound/outbound)
+        let direction = event.get_header("Call-Direction")
+            .or_else(|| event.get_header("Caller-Direction"))
+            .map(|s| s.to_lowercase())
+            .unwrap_or_else(|| "outbound".to_string());
+
+        info!("📞 CHANNEL_CREATE (a-leg): {} - {} → {} [{}]", uuid, caller, callee, direction);
 
         // Authorize call
         let auth_req = AuthRequest {
             caller: caller.clone(),
             callee: callee.clone(),
             uuid: Some(uuid.clone()),
+            direction: Some(direction.clone()),
         };
 
         match self.auth_service.authorize(&auth_req).await {
@@ -108,15 +127,10 @@ impl EventHandler {
                     }
 
                 } else {
-                    info!("✅ Call AUTHORIZED: {}", uuid);
+                    info!("✅ Call AUTHORIZED: {} [{}]", uuid, direction);
 
                     // Insert into active_calls table
                     if let Ok(client) = self.db_pool.get().await {
-                        // Get direction from event headers or default to outbound
-                        let direction = event.get_header("Call-Direction")
-                            .or_else(|| event.get_header("Caller-Direction"))
-                            .cloned()
-                            .unwrap_or_else(|| "outbound".to_string());
                         let now = Utc::now();
 
                         match client.execute(
@@ -125,7 +139,7 @@ impl EventHandler {
                              ON CONFLICT (call_id) DO NOTHING",
                             &[&uuid, &caller, &callee, &direction, &now, &self.server_id]
                         ).await {
-                            Ok(_) => info!("📊 Added call {} to active_calls", uuid),
+                            Ok(_) => info!("📊 Added call {} to active_calls [{}]", uuid, direction),
                             Err(e) => error!("❌ Failed to add call {} to active_calls: {}", uuid, e),
                         }
                     }
@@ -143,7 +157,18 @@ impl EventHandler {
             None => return,
         };
 
-        info!("✅ CHANNEL_ANSWER: {}", uuid);
+        // 🔍 Solo procesar a-leg para evitar duplicados
+        let call_direction = event.get_header("Caller-Logical-Direction")
+            .or_else(|| event.get_header("variable_leg"))
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
+
+        if call_direction == "leg_b" || call_direction == "outbound" && event.get_header("Other-Leg-Unique-ID").is_some() {
+            info!("⏭️  Skipping b-leg answer: {} (direction: {})", uuid, call_direction);
+            return;
+        }
+
+        info!("✅ CHANNEL_ANSWER (a-leg): {}", uuid);
 
         // Start realtime billing for prepaid
         // TODO: Get account type from session
@@ -157,15 +182,32 @@ impl EventHandler {
             None => return,
         };
 
+        // 🔍 Solo procesar a-leg para evitar duplicados
+        let call_direction = event.get_header("Caller-Logical-Direction")
+            .or_else(|| event.get_header("variable_leg"))
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
+
+        if call_direction == "leg_b" || call_direction == "outbound" && event.get_header("Other-Leg-Unique-ID").is_some() {
+            info!("⏭️  Skipping b-leg hangup: {} (direction: {})", uuid, call_direction);
+            return;
+        }
+
         let caller = event.caller().cloned().unwrap_or_default();
         let callee = event.callee().cloned().unwrap_or_default();
         let duration = event.duration().unwrap_or(0);
         let billsec = event.billsec().unwrap_or(0);
         let hangup_cause = event.hangup_cause().cloned().unwrap_or_else(|| "UNKNOWN".to_string());
 
+        // 🔍 Detectar dirección real
+        let direction = event.get_header("Call-Direction")
+            .or_else(|| event.get_header("Caller-Direction"))
+            .map(|s| s.to_lowercase())
+            .unwrap_or_else(|| "outbound".to_string());
+
         info!(
-            "📴 CHANNEL_HANGUP: {} - Duration: {}s, Billsec: {}s, Cause: {}",
-            uuid, duration, billsec, hangup_cause
+            "📴 CHANNEL_HANGUP (a-leg): {} - Duration: {}s, Billsec: {}s, Cause: {} [{}]",
+            uuid, duration, billsec, hangup_cause, direction
         );
 
         // Stop realtime billing
@@ -220,7 +262,7 @@ impl EventHandler {
             duration,
             billsec,
             hangup_cause,
-            direction: "outbound".to_string(), // TODO: Get from event
+            direction: direction.clone(),  // ✅ Dirección real
             server_id: self.server_id.clone(),
         };
 

@@ -11,6 +11,8 @@ pub struct FreeSwitchAuthQuery {
     pub callee: String,
     #[serde(default)]
     pub uuid: Option<String>,
+    #[serde(default)]
+    pub direction: Option<String>,
 }
 
 pub async fn health_check() -> HttpResponse {
@@ -49,6 +51,7 @@ pub async fn freeswitch_authorize(
         caller: query.caller.clone(),
         callee: query.callee.clone(),
         uuid: query.uuid.clone(),
+        direction: query.direction.clone(),
     };
 
     match auth_service.authorize(&auth_req).await {

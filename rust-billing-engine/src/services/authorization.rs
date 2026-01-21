@@ -33,10 +33,11 @@ impl AuthorizationService {
 
     pub async fn authorize(&self, req: &AuthRequest) -> Result<AuthResponse, BillingError> {
         let call_uuid = req.uuid.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-        
+        let direction = req.direction.as_deref().unwrap_or("outbound");
+
         info!(
-            "🔍 Authorizing call [v2] {}: {} → {}",
-            call_uuid, req.caller, req.callee
+            "🔍 Authorizing call [v2] {}: {} → {} [{}]",
+            call_uuid, req.caller, req.callee, direction
         );
 
         // 1. Find account by ANI (caller)
@@ -64,6 +65,26 @@ impl AuthorizationService {
             return Ok(AuthResponse {
                 authorized: false,
                 reason: format!("account_{:?}", account.status).to_lowercase(),
+                uuid: call_uuid,
+                account_id: Some(account.id.into()),
+                account_number: Some(account.account_number),
+                reservation_id: None,
+                reserved_amount: None,
+                max_duration_seconds: None,
+                rate_per_minute: None,
+            });
+        }
+
+        // 📞 INBOUND CALLS: Solo registrar, NO tarificar
+        if direction == "inbound" {
+            info!(
+                "✅ INBOUND Call AUTHORIZED (no billing): {} for account {}",
+                call_uuid, account.account_number
+            );
+
+            return Ok(AuthResponse {
+                authorized: true,
+                reason: "authorized_inbound".to_string(),
                 uuid: call_uuid,
                 account_id: Some(account.id.into()),
                 account_number: Some(account.account_number),

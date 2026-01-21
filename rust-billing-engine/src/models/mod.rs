@@ -20,6 +20,8 @@ pub struct AuthRequest {
     pub callee: String,
     #[serde(default)]
     pub uuid: Option<String>,
+    #[serde(default)]
+    pub direction: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

@@ -39,15 +39,21 @@ impl CdrGenerator {
     }
 
     pub async fn generate_cdr(&self, event: HangupEvent) -> Result<i64, BillingError> {
-        info!("📝 Generating CDR for call: {}", event.uuid);
+        let is_inbound = event.direction.to_lowercase() == "inbound";
+
+        info!(
+            "📝 Generating CDR for call: {} [{}]",
+            event.uuid,
+            if is_inbound { "INBOUND - No billing" } else { "OUTBOUND - Billable" }
+        );
 
         let client = self.db_pool.get().await
             .map_err(|e| {
                 error!("❌ Failed to get DB connection: {}", e);
                 BillingError::Internal(e.to_string())
             })?;
-        
-        // Try to get reservation info
+
+        // Try to get reservation info (inbound calls won't have reservation)
         let reservation_row = client
             .query_opt(
                 "SELECT br.account_id, br.rate_per_minute, rc.billing_increment
@@ -96,7 +102,11 @@ impl CdrGenerator {
             
             (Some(account_id), Some(rate), Some(cost))
         } else {
-            warn!("⚠️  No reservation found for call {}, creating basic CDR without billing", event.uuid);
+            if is_inbound {
+                info!("📞 INBOUND call {} - No billing required", event.uuid);
+            } else {
+                warn!("⚠️  No reservation found for OUTBOUND call {}, creating basic CDR without billing", event.uuid);
+            }
             (None, None, None)
         };
 
@@ -156,13 +166,17 @@ impl CdrGenerator {
                 }
             }
         } else {
-            info!("ℹ️  No reservation to consume for call {}", event.uuid);
+            if is_inbound {
+                info!("📞 INBOUND call {} - No reservation to consume", event.uuid);
+            } else {
+                info!("ℹ️  No reservation to consume for call {}", event.uuid);
+            }
         }
 
         info!(
-            "✅ CDR generated: ID={}, UUID={}, Duration={}s, Billsec={}s, Cost=${:?}, Cause={}",
-            cdr_id, event.uuid, event.duration, event.billsec, 
-            cost.map(|c| c.to_f64().unwrap_or(0.0)), 
+            "✅ CDR generated: ID={}, UUID={}, Direction={}, Duration={}s, Billsec={}s, Cost=${:?}, Cause={}",
+            cdr_id, event.uuid, event.direction, event.duration, event.billsec,
+            cost.map(|c| c.to_f64().unwrap_or(0.0)),
             event.hangup_cause
         );
 
