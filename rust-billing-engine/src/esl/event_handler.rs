@@ -91,10 +91,23 @@ impl EventHandler {
         let callee = event.callee().cloned().unwrap_or_default();
 
         // 🔍 Detectar dirección de la llamada (inbound/outbound)
-        let direction = event.get_header("Call-Direction")
-            .or_else(|| event.get_header("Caller-Direction"))
-            .map(|s| s.to_lowercase())
-            .unwrap_or_else(|| "outbound".to_string());
+        // Si el contexto es from-pbx, la llamada es OUTBOUND (usuario de PBX llamando hacia afuera)
+        let context = event.get_header("Caller-Context")
+            .or_else(|| event.get_header("variable_context"))
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
+
+        let direction = if context == "from-pbx" || context.starts_with("from-pbx") {
+            // Llamadas desde PBX siempre son salientes
+            "outbound".to_string()
+        } else {
+            event.get_header("Call-Direction")
+                .or_else(|| event.get_header("Caller-Direction"))
+                .map(|s| s.to_lowercase())
+                .unwrap_or_else(|| "outbound".to_string())
+        };
+
+        info!("📞 Context: {} → Direction: {}", context, direction);
 
         info!("📞 CHANNEL_CREATE (a-leg): {} - {} → {} [{}]", uuid, caller, callee, direction);
 
@@ -200,10 +213,20 @@ impl EventHandler {
         let hangup_cause = event.hangup_cause().cloned().unwrap_or_else(|| "UNKNOWN".to_string());
 
         // 🔍 Detectar dirección real
-        let direction = event.get_header("Call-Direction")
-            .or_else(|| event.get_header("Caller-Direction"))
-            .map(|s| s.to_lowercase())
-            .unwrap_or_else(|| "outbound".to_string());
+        // Si el contexto es from-pbx, la llamada es OUTBOUND
+        let context = event.get_header("Caller-Context")
+            .or_else(|| event.get_header("variable_context"))
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
+
+        let direction = if context == "from-pbx" || context.starts_with("from-pbx") {
+            "outbound".to_string()
+        } else {
+            event.get_header("Call-Direction")
+                .or_else(|| event.get_header("Caller-Direction"))
+                .map(|s| s.to_lowercase())
+                .unwrap_or_else(|| "outbound".to_string())
+        };
 
         info!(
             "📴 CHANNEL_HANGUP (a-leg): {} - Duration: {}s, Billsec: {}s, Cause: {} [{}]",
