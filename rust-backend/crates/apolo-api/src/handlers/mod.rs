@@ -9,6 +9,7 @@ pub mod management;
 pub mod rate;
 pub mod rate_card;
 pub mod reservation;
+pub mod ws;
 
 pub use account::configure as configure_accounts;
 pub use active_call::configure as configure_active_calls;
@@ -20,3 +21,4 @@ pub use management::configure as configure_management;
 pub use rate::configure as configure_rates;
 pub use rate_card::configure as configure_rate_cards;
 pub use reservation::configure as configure_reservations;
+pub use ws::ws_handler;

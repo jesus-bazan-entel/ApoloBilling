@@ -8,6 +8,7 @@ use actix_web::{http::header, middleware, web, App, HttpResponse, HttpServer};
 use apolo_api::handlers::{
     cdr, configure_accounts, configure_active_calls, configure_auth, configure_dashboard,
     configure_management, configure_rate_cards, configure_rates, configure_reservations, create_cdr,
+    ws_handler,
 };
 use apolo_auth::{JwtService, PasswordService};
 use apolo_db::create_pool;
@@ -204,6 +205,8 @@ async fn main() -> std::io::Result<()> {
             .wrap(middleware::NormalizePath::trim())
             // Configure routes
             .configure(configure_routes)
+            // WebSocket endpoint for real-time updates
+            .route("/ws", web::get().to(ws_handler))
             // Root redirect to health
             .route(
                 "/",

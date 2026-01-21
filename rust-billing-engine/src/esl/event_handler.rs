@@ -109,6 +109,26 @@ impl EventHandler {
 
                 } else {
                     info!("✅ Call AUTHORIZED: {}", uuid);
+
+                    // Insert into active_calls table
+                    if let Ok(client) = self.db_pool.get().await {
+                        // Get direction from event headers or default to outbound
+                        let direction = event.get_header("Call-Direction")
+                            .or_else(|| event.get_header("Caller-Direction"))
+                            .cloned()
+                            .unwrap_or_else(|| "outbound".to_string());
+                        let now = Utc::now();
+
+                        match client.execute(
+                            "INSERT INTO active_calls (call_id, calling_number, called_number, direction, start_time, current_duration, current_cost, server)
+                             VALUES ($1, $2, $3, $4, $5, 0, 0, $6)
+                             ON CONFLICT (call_id) DO NOTHING",
+                            &[&uuid, &caller, &callee, &direction, &now, &self.server_id]
+                        ).await {
+                            Ok(_) => info!("📊 Added call {} to active_calls", uuid),
+                            Err(e) => error!("❌ Failed to add call {} to active_calls: {}", uuid, e),
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -150,6 +170,21 @@ impl EventHandler {
 
         // Stop realtime billing
         self.realtime_biller.stop_billing(&uuid).await;
+
+        // Remove from active_calls table
+        if let Ok(client) = self.db_pool.get().await {
+            match client.execute(
+                "DELETE FROM active_calls WHERE call_id = $1",
+                &[&uuid]
+            ).await {
+                Ok(rows) => {
+                    if rows > 0 {
+                        info!("📊 Removed call {} from active_calls", uuid);
+                    }
+                }
+                Err(e) => error!("❌ Failed to remove call {} from active_calls: {}", uuid, e),
+            }
+        }
 
         // ✅ Limpia Redis para llamadas rechazadas (que no tienen reservación)
         if let Ok(client) = self.db_pool.get().await {

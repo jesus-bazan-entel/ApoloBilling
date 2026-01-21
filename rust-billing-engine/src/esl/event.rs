@@ -1,6 +1,6 @@
 // src/esl/event.rs
 use std::collections::HashMap;
-use chrono::{DateTime, Utc, NaiveDateTime};
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
 pub struct EslEvent {

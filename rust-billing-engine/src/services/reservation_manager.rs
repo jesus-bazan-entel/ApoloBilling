@@ -6,7 +6,7 @@ use crate::error::BillingError;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::{ToPrimitive, FromPrimitive};
 use uuid::Uuid;
-use chrono::{Utc, Duration, NaiveDateTime};
+use chrono::{Utc, Duration};
 use tracing::{info, warn, error};
 use deadpool_postgres::Transaction;
 
@@ -117,7 +117,6 @@ impl ReservationManager {
 
         let reservation_id = Uuid::new_v4();
         let expires_at = Utc::now() + Duration::seconds(RESERVATION_TTL);
-        let expires_at_naive = expires_at.naive_utc();
 
         let account_id_i32 = account_id as i32;
         let dest_prefix = &destination[..std::cmp::min(10, destination.len())];
@@ -126,6 +125,7 @@ impl ReservationManager {
             .map_err(|e| BillingError::Internal(e.to_string()))?;
 
         // Use parameterized query to prevent SQL injection
+        // expires_at is TIMESTAMP WITH TIME ZONE, use DateTime<Utc> directly
         client
             .execute(
                 "INSERT INTO balance_reservations
@@ -144,7 +144,7 @@ impl ReservationManager {
                     &dest_prefix,
                     &rate_per_minute,
                     &INITIAL_RESERVATION_MINUTES,
-                    &expires_at_naive,
+                    &expires_at,
                 ],
             )
             .await
@@ -675,7 +675,6 @@ impl ReservationManager {
 
         let extension_id = Uuid::new_v4();
         let expires_at = Utc::now() + Duration::seconds(RESERVATION_TTL);
-        let expires_at_naive = expires_at.naive_utc();
 
         let dest_row = client
             .query_one(
@@ -689,6 +688,7 @@ impl ReservationManager {
         let call_uuid_str = call_uuid.to_string();
 
         // Use parameterized query
+        // expires_at is TIMESTAMP WITH TIME ZONE, use DateTime<Utc> directly
         client
             .execute(
                 "INSERT INTO balance_reservations
@@ -707,7 +707,7 @@ impl ReservationManager {
                     &destination_prefix,
                     &rate_per_minute,
                     &additional_minutes,
-                    &expires_at_naive,
+                    &expires_at,
                 ],
             )
             .await

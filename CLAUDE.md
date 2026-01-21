@@ -525,6 +525,291 @@ active_reservations:{id}   → SET de reservation IDs por cuenta
 
 ---
 
+# CORRECCIONES Y MEJORAS RECIENTES (Enero 2026)
+
+## Panel de Llamadas Activas - Tiempo Real
+
+### Problema Resuelto
+La duración de las llamadas activas no se actualizaba en tiempo real en la interfaz web.
+
+### Solución Implementada
+**Archivo:** `frontend/src/pages/ActiveCalls.tsx`
+
+1. **Timer de actualización cada segundo:**
+```typescript
+const [, setTick] = useState(0)
+
+useEffect(() => {
+  const interval = setInterval(() => {
+    setTick(t => t + 1)
+  }, 1000)
+  return () => clearInterval(interval)
+}, [])
+```
+
+2. **Cálculo de duración en tiempo real:**
+```typescript
+// En la columna de duración:
+const startTime = new Date(call.start_time).getTime()
+const now = Date.now()
+const durationSec = Math.max(0, Math.floor((now - startTime) / 1000))
+```
+
+3. **Cálculo de costo estimado en tiempo real:**
+```typescript
+const rate = call.rate_per_minute || 0
+const cost = (durationSec / 60) * rate
+```
+
+### Resultado
+- Duración se actualiza cada segundo
+- Costo estimado se actualiza cada segundo
+- Costo total de todas las llamadas se actualiza en tiempo real
+
+---
+
+## WebSocket - Manejo de Mensajes
+
+### Problema Resuelto
+El frontend no procesaba correctamente los mensajes `active_calls` del backend.
+
+### Solución Implementada
+**Archivo:** `frontend/src/hooks/useWebSocket.ts`
+
+```typescript
+case 'active_calls':
+  const allCalls = message.data as ActiveCall[]
+  setActiveCalls(allCalls)
+  break
+case 'pong':
+  // Heartbeat response - no action needed
+  break
+```
+
+**Archivo:** `frontend/src/types/index.ts`
+```typescript
+export interface WSMessage {
+  type: 'active_calls' | 'call_start' | 'call_update' | 'call_end' | 'stats_update' | 'pong' | 'error'
+  data: ActiveCall | ActiveCall[] | DashboardStats | { message: string }
+}
+```
+
+---
+
+## FreeSWITCH Dialplan - Autorización con Billing
+
+### Problema Resuelto
+Después de autorizar una llamada, FreeSWITCH no ejecutaba el bridge porque las condiciones del dialplan no continuaban evaluándose.
+
+### Archivo
+`/etc/freeswitch/dialplan/from-pbx.xml`
+
+### Correcciones
+
+1. **Agregar `break="never"` a las condiciones:**
+```xml
+<!-- Antes: la condición fallaba y detenía el procesamiento -->
+<condition field="${billing_response}" expression="^DENIED">
+
+<!-- Después: continúa evaluando las siguientes condiciones -->
+<condition field="${billing_response}" expression="^DENIED" break="never">
+```
+
+2. **Escapar caracteres `&` en URLs (XML entities):**
+```xml
+<!-- Incorrecto (causa error de parseo XML): -->
+<action application="set" data="billing_response=${curl(...?caller=${billing_caller}&callee=${billing_destination}&uuid=${uuid})}"/>
+
+<!-- Correcto: -->
+<action application="set" data="billing_response=${curl(...?caller=${billing_caller}&amp;callee=${billing_destination}&amp;uuid=${uuid})}"/>
+```
+
+### Importante
+- **Ownership del archivo:** El archivo debe pertenecer al usuario `freeswitch:freeswitch`
+- **Validar XML:** Usar `xmllint --noout /etc/freeswitch/dialplan/from-pbx.xml`
+- **Recargar:** Ejecutar `fs_cli -x "reloadxml"` después de cambios
+
+---
+
+## CDR Generator - Nombres de Columnas
+
+### Problema Resuelto
+Error de base de datos al insertar CDRs porque los nombres de columnas no coincidían con el esquema.
+
+### Archivo
+`rust-billing-engine/src/services/cdr_generator.rs`
+
+### Corrección
+```rust
+// Columnas incorrectas → correctas:
+// uuid           → call_uuid
+// caller         → caller_number
+// callee         → called_number
+// rate_applied   → rate_per_minute
+
+"INSERT INTO cdrs
+ (call_uuid, account_id, caller_number, called_number, start_time, answer_time, end_time,
+  duration, billsec, hangup_cause, rate_per_minute, cost, direction, freeswitch_server_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+ RETURNING id"
+```
+
+---
+
+## Timestamps PostgreSQL - DateTime<Utc>
+
+### Problema Resuelto
+Errores de serialización al insertar/consultar campos `TIMESTAMP WITH TIME ZONE`.
+
+### Archivos Afectados
+- `rust-billing-engine/src/services/authorization.rs`
+- `rust-billing-engine/src/services/cdr_generator.rs`
+- `rust-billing-engine/src/services/reservation_manager.rs`
+
+### Corrección
+```rust
+// Incorrecto: usar NaiveDateTime para TIMESTAMP WITH TIME ZONE
+let created_at_naive: NaiveDateTime = row.get(6);
+
+// Correcto: usar DateTime<Utc> directamente
+let created_at: DateTime<Utc> = row.get(6);
+```
+
+**Regla:** PostgreSQL `TIMESTAMP WITH TIME ZONE` requiere `DateTime<Utc>` con `tokio-postgres`, no `NaiveDateTime`.
+
+---
+
+## Gestión de Zonas - CRUD Completo
+
+### Mejoras Implementadas
+**Archivo:** `frontend/src/pages/Zones.tsx`
+
+1. **Operaciones CRUD completas:**
+   - Crear zona
+   - Editar zona
+   - Eliminar zona con confirmación
+
+2. **Campos adicionales:**
+   - `zone_code` - Código de zona (ej: PE-LIM, US-NYC)
+   - `region_name` - Nombre de región (ej: Sudamérica)
+
+3. **Manejo de errores:**
+   - Mensajes de error visibles en modales
+   - Callbacks `onError` en mutations
+
+4. **Columna de acciones:**
+```typescript
+{
+  key: 'actions',
+  header: 'Acciones',
+  render: (zone: Zone) => (
+    <div className="flex items-center space-x-2">
+      <button onClick={() => setEditingZone(zone)}>
+        <Pencil className="w-4 h-4" />
+      </button>
+      <button onClick={() => setDeletingZone(zone)}>
+        <Trash2 className="w-4 h-4" />
+      </button>
+    </div>
+  ),
+}
+```
+
+### Type Definition
+**Archivo:** `frontend/src/types/index.ts`
+```typescript
+export interface Zone {
+  id: number
+  zone_name: string
+  zone_code?: string      // Nuevo
+  zone_type?: string
+  network_type?: string
+  region_name?: string    // Nuevo
+  description?: string
+  enabled?: boolean
+  created_at?: string
+  updated_at?: string
+}
+```
+
+---
+
+## Gestión de Tarifas - Relación con Zonas
+
+### Mejora Implementada
+**Archivo:** `frontend/src/pages/Rates.tsx`
+
+### Cambio
+En lugar de escribir manualmente el nombre del destino, ahora se selecciona una zona desde un dropdown.
+
+```typescript
+// Cargar zonas disponibles
+const { data: zones = [] } = useQuery({
+  queryKey: ['zones'],
+  queryFn: fetchZones,
+})
+
+// Selector de zona en el formulario
+<select
+  value={formData.zone_id || ''}
+  onChange={(e) => handleZoneChange(e.target.value)}
+>
+  <option value="">Seleccionar zona...</option>
+  {zones.map((zone) => (
+    <option key={zone.id} value={zone.id}>
+      {zone.zone_name} {zone.description ? `- ${zone.description}` : ''}
+    </option>
+  ))}
+</select>
+
+// Al seleccionar zona, se establece destination_name automáticamente
+const handleZoneChange = (zoneId: string) => {
+  const zone = zones.find(z => z.id === Number(zoneId))
+  setFormData({
+    ...formData,
+    zone_id: zone?.id,
+    destination_name: zone?.zone_name || ''
+  })
+}
+```
+
+---
+
+## Active Calls - Tabla en Base de Datos
+
+### Mejora Implementada
+**Archivo:** `rust-billing-engine/src/esl/event_handler.rs`
+
+El billing engine ahora inserta y elimina registros de la tabla `active_calls`:
+
+```rust
+// En CHANNEL_CREATE (después de autorización exitosa):
+INSERT INTO active_calls (call_uuid, caller_number, callee_number, ...)
+VALUES ($1, $2, $3, ...)
+
+// En CHANNEL_HANGUP:
+DELETE FROM active_calls WHERE call_uuid = $1
+```
+
+---
+
+## Resumen de Archivos Modificados
+
+| Archivo | Cambios |
+|---------|---------|
+| `frontend/src/pages/ActiveCalls.tsx` | Timer 1s, cálculo real-time duración/costo |
+| `frontend/src/pages/Zones.tsx` | CRUD completo, modales edit/delete |
+| `frontend/src/pages/Rates.tsx` | Selector dropdown de zonas |
+| `frontend/src/hooks/useWebSocket.ts` | Manejo mensajes `active_calls`, `pong` |
+| `frontend/src/types/index.ts` | Zone: +zone_code, +region_name |
+| `rust-billing-engine/src/services/cdr_generator.rs` | Nombres columnas CDR |
+| `rust-billing-engine/src/services/authorization.rs` | DateTime<Utc> timestamps |
+| `rust-billing-engine/src/services/reservation_manager.rs` | DateTime<Utc> expires_at |
+| `rust-billing-engine/src/esl/event_handler.rs` | INSERT/DELETE active_calls |
+| `/etc/freeswitch/dialplan/from-pbx.xml` | break="never", &amp; entities |
+
+---
+
 # GIT Y GITHUB
 
 ## Verificar Estado de Cambios

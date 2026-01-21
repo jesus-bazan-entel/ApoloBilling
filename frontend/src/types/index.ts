@@ -22,8 +22,10 @@ export interface Account {
 export interface Zone {
   id: number
   zone_name: string
+  zone_code?: string
   zone_type?: string
   network_type?: string
+  region_name?: string
   description?: string
   enabled?: boolean
   created_at?: string
@@ -159,8 +161,8 @@ export interface AuthResponse {
 
 // WebSocket Message Types
 export interface WSMessage {
-  type: 'call_start' | 'call_update' | 'call_end' | 'stats_update'
-  data: ActiveCall | DashboardStats
+  type: 'active_calls' | 'call_start' | 'call_update' | 'call_end' | 'stats_update' | 'pong' | 'error'
+  data: ActiveCall | ActiveCall[] | DashboardStats | { message: string }
 }
 
 // API Response wrapper - matches Rust backend ApiResponse

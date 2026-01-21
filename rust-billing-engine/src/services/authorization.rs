@@ -10,7 +10,7 @@ use uuid::Uuid;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use tracing::{info, warn, error};
-use chrono::{DateTime, Utc, NaiveDateTime, TimeZone}; // ✅ Añadir NaiveDateTime y TimeZone
+use chrono::{DateTime, Utc};
 
 pub struct AuthorizationService {
     db_pool: DbPool,
@@ -173,12 +173,9 @@ impl AuthorizationService {
                 let max_concurrent_calls: i32 = r.get(4);
                 let status_str: String = r.get(5);
                 
-                // ✅ SOLUCIÓN: Obtener como NaiveDateTime y convertir a DateTime<Utc>
-                let created_at_naive: NaiveDateTime = r.get(6);
-                let updated_at_naive: NaiveDateTime = r.get(7);
-                
-                let created_at = Utc.from_utc_datetime(&created_at_naive);
-                let updated_at = Utc.from_utc_datetime(&updated_at_naive);
+                // ✅ TIMESTAMP WITH TIME ZONE se deserializa directamente como DateTime<Utc>
+                let created_at: DateTime<Utc> = r.get(6);
+                let updated_at: DateTime<Utc> = r.get(7);
 
                 info!(
                     "✅ Found account: {} (ID: {}, Type: {}, Balance: ${}, Status: {})",
@@ -245,13 +242,9 @@ impl AuthorizationService {
 
         match row {
             Some(r) => {
-                // Convert NaiveDateTime to DateTime<Utc>
-                let effective_start_naive: NaiveDateTime = r.get(6);
-                let effective_start = Utc.from_utc_datetime(&effective_start_naive);
-
-                let effective_end: Option<DateTime<Utc>> = r.try_get::<_, NaiveDateTime>(7)
-                    .ok()
-                    .map(|naive| Utc.from_utc_datetime(&naive));
+                // TIMESTAMP WITH TIME ZONE se deserializa directamente como DateTime<Utc>
+                let effective_start: DateTime<Utc> = r.get(6);
+                let effective_end: Option<DateTime<Utc>> = r.try_get(7).ok();
 
                 let rate = crate::models::RateCard {
                     id: r.get(0),

@@ -43,6 +43,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
           const message: WSMessage = JSON.parse(event.data)
 
           switch (message.type) {
+            case 'active_calls':
+              // Full list of active calls from server
+              const allCalls = message.data as ActiveCall[]
+              setActiveCalls(allCalls)
+              break
+
             case 'call_start':
               const newCall = message.data as ActiveCall
               setActiveCalls((prev) => [...prev, newCall])
@@ -52,14 +58,14 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
             case 'call_update':
               const updatedCall = message.data as ActiveCall
               setActiveCalls((prev) =>
-                prev.map((c) => (c.uuid === updatedCall.uuid ? updatedCall : c))
+                prev.map((c) => (c.call_uuid === updatedCall.call_uuid ? updatedCall : c))
               )
               onCallUpdate?.(updatedCall)
               break
 
             case 'call_end':
               const endedCall = message.data as ActiveCall
-              setActiveCalls((prev) => prev.filter((c) => c.uuid !== endedCall.uuid))
+              setActiveCalls((prev) => prev.filter((c) => c.call_uuid !== endedCall.call_uuid))
               onCallEnd?.(endedCall)
               break
 
@@ -67,6 +73,10 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
               const newStats = message.data as DashboardStats
               setStats(newStats)
               onStatsUpdate?.(newStats)
+              break
+
+            case 'pong':
+              // Keepalive response, ignore
               break
           }
         } catch (err) {

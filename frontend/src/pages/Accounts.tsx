@@ -384,7 +384,7 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
     if (isEditing) {
       // Solo enviar campos que se pueden editar
       onSubmit({
-        status: formData.status,
+        status: formData.status as AccountStatus,
         credit_limit: formData.credit_limit,
         max_concurrent_calls: formData.max_concurrent_calls,
       })

@@ -6,16 +6,19 @@ import {
   updateRateCard,
   deleteRateCard,
   lookupRate,
+  fetchZones,
 } from '../api/client'
 import DataTable from '../components/DataTable'
 import Badge from '../components/Badge'
 import { Settings, Plus, Edit, Trash2, Search, X } from 'lucide-react'
-import type { RateCard } from '../types'
+import type { RateCard, Zone } from '../types'
 
 export default function RatesPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingRate, setEditingRate] = useState<RateCard | null>(null)
+  const [deletingRate, setDeletingRate] = useState<RateCard | null>(null)
   const [showLookup, setShowLookup] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
   const { data: rates = [], isLoading } = useQuery({
@@ -24,12 +27,22 @@ export default function RatesPage() {
     refetchInterval: 30000,
   })
 
+  const { data: zones = [] } = useQuery({
+    queryKey: ['zones'],
+    queryFn: fetchZones,
+  })
+
   const createMutation = useMutation({
     mutationFn: createRateCard,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['rates'] })
       setShowModal(false)
       setEditingRate(null)
+      setError(null)
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      const message = err.response?.data?.message || err.message || 'Error al crear la tarifa'
+      setError(message)
     },
   })
 
@@ -40,6 +53,11 @@ export default function RatesPage() {
       queryClient.invalidateQueries({ queryKey: ['rates'] })
       setShowModal(false)
       setEditingRate(null)
+      setError(null)
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      const message = err.response?.data?.message || err.message || 'Error al actualizar la tarifa'
+      setError(message)
     },
   })
 
@@ -47,23 +65,25 @@ export default function RatesPage() {
     mutationFn: deleteRateCard,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['rates'] })
+      setDeletingRate(null)
+      setError(null)
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      const message = err.response?.data?.message || err.message || 'Error al eliminar la tarifa'
+      setError(message)
     },
   })
 
   const handleEdit = (rate: RateCard) => {
     setEditingRate(rate)
+    setError(null)
     setShowModal(true)
   }
 
   const handleCreate = () => {
     setEditingRate(null)
+    setError(null)
     setShowModal(true)
-  }
-
-  const handleDelete = (id: number) => {
-    if (confirm('¿Estás seguro de eliminar esta tarifa?')) {
-      deleteMutation.mutate(id)
-    }
   }
 
   const columns = [
@@ -90,7 +110,7 @@ export default function RatesPage() {
       header: 'Tarifa/Min',
       render: (rate: RateCard) => (
         <span className="font-mono text-green-600 font-bold">
-          ${rate.rate_per_minute.toFixed(4)}
+          ${Number(rate.rate_per_minute).toFixed(4)}
         </span>
       ),
       className: 'text-right',
@@ -108,7 +128,7 @@ export default function RatesPage() {
       header: 'Cargo Conexión',
       render: (rate: RateCard) => (
         <span className="font-mono text-slate-700">
-          ${rate.connection_fee.toFixed(4)}
+          ${Number(rate.connection_fee).toFixed(4)}
         </span>
       ),
       className: 'text-right',
@@ -144,13 +164,15 @@ export default function RatesPage() {
         <div className="flex items-center space-x-2">
           <button
             onClick={() => handleEdit(rate)}
-            className="text-blue-600 hover:text-blue-700"
+            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+            title="Editar"
           >
             <Edit className="w-4 h-4" />
           </button>
           <button
-            onClick={() => handleDelete(rate.id)}
-            className="text-red-600 hover:text-red-700"
+            onClick={() => setDeletingRate(rate)}
+            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            title="Eliminar"
           >
             <Trash2 className="w-4 h-4" />
           </button>
@@ -207,7 +229,7 @@ export default function RatesPage() {
                 $
                 {rates.length > 0
                   ? (
-                      rates.reduce((sum, r) => sum + r.rate_per_minute, 0) /
+                      rates.reduce((sum, r) => sum + Number(r.rate_per_minute), 0) /
                       rates.length
                     ).toFixed(4)
                   : '0.0000'}
@@ -253,9 +275,11 @@ export default function RatesPage() {
       {showModal && (
         <RateModal
           rate={editingRate}
+          zones={zones}
           onClose={() => {
             setShowModal(false)
             setEditingRate(null)
+            setError(null)
           }}
           onSubmit={(data) => {
             if (editingRate) {
@@ -265,6 +289,22 @@ export default function RatesPage() {
             }
           }}
           isLoading={createMutation.isPending || updateMutation.isPending}
+          error={error}
+        />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingRate && (
+        <DeleteConfirmModal
+          title="Eliminar Tarifa"
+          message={`¿Estás seguro de que deseas eliminar la tarifa para "${deletingRate.destination_prefix} - ${deletingRate.destination_name}"? Esta acción no se puede deshacer.`}
+          onClose={() => {
+            setDeletingRate(null)
+            setError(null)
+          }}
+          onConfirm={() => deleteMutation.mutate(deletingRate.id)}
+          isLoading={deleteMutation.isPending}
+          error={error}
         />
       )}
 
@@ -276,15 +316,27 @@ export default function RatesPage() {
 
 interface RateModalProps {
   rate: RateCard | null
+  zones: Zone[]
   onClose: () => void
   onSubmit: (data: Partial<RateCard>) => void
   isLoading: boolean
+  error: string | null
 }
 
-function RateModal({ rate, onClose, onSubmit, isLoading }: RateModalProps) {
-  const [formData, setFormData] = useState<Partial<RateCard>>({
+function RateModal({ rate, zones, onClose, onSubmit, isLoading, error }: RateModalProps) {
+  // Find zone_id from destination_name if editing
+  const findZoneId = () => {
+    if (rate?.destination_name) {
+      const zone = zones.find(z => z.zone_name === rate.destination_name)
+      return zone?.id || ''
+    }
+    return ''
+  }
+
+  const [formData, setFormData] = useState<Partial<RateCard> & { zone_id?: number | string }>({
     destination_prefix: rate?.destination_prefix || '',
     destination_name: rate?.destination_name || '',
+    zone_id: findZoneId(),
     rate_per_minute: rate?.rate_per_minute || 0,
     billing_increment: rate?.billing_increment || 60,
     connection_fee: rate?.connection_fee || 0,
@@ -292,6 +344,15 @@ function RateModal({ rate, onClose, onSubmit, isLoading }: RateModalProps) {
     effective_start: rate?.effective_start || new Date().toISOString().split('T')[0],
     effective_end: rate?.effective_end || null,
   })
+
+  const handleZoneChange = (zoneId: string) => {
+    const selectedZone = zones.find(z => z.id === parseInt(zoneId))
+    setFormData({
+      ...formData,
+      zone_id: zoneId ? parseInt(zoneId) : '',
+      destination_name: selectedZone?.zone_name || '',
+    })
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -314,6 +375,12 @@ function RateModal({ rate, onClose, onSubmit, isLoading }: RateModalProps) {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+              {error}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -336,18 +403,26 @@ function RateModal({ rate, onClose, onSubmit, isLoading }: RateModalProps) {
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Nombre de Destino *
+                Zona de Destino *
               </label>
-              <input
-                type="text"
+              <select
                 required
-                value={formData.destination_name}
-                onChange={(e) =>
-                  setFormData({ ...formData, destination_name: e.target.value })
-                }
-                placeholder="Ej: Peru Lima Mobile"
+                value={formData.zone_id || ''}
+                onChange={(e) => handleZoneChange(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
+              >
+                <option value="">Seleccionar zona...</option>
+                {zones.map((zone) => (
+                  <option key={zone.id} value={zone.id}>
+                    {zone.zone_name} {zone.description ? `- ${zone.description}` : ''}
+                  </option>
+                ))}
+              </select>
+              {zones.length === 0 && (
+                <p className="text-xs text-amber-600 mt-1">
+                  No hay zonas disponibles. Crea una zona primero.
+                </p>
+              )}
             </div>
 
             <div>
@@ -388,7 +463,7 @@ function RateModal({ rate, onClose, onSubmit, isLoading }: RateModalProps) {
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
               <p className="text-xs text-slate-500 mt-1">
-                Típico: 60 seg (1 min)
+                Típico: 60 seg (1 min) o 6 seg
               </p>
             </div>
 
@@ -438,7 +513,7 @@ function RateModal({ rate, onClose, onSubmit, isLoading }: RateModalProps) {
               <input
                 type="date"
                 required
-                value={formData.effective_start?.split('T')[0]}
+                value={formData.effective_start?.toString().split('T')[0]}
                 onChange={(e) =>
                   setFormData({ ...formData, effective_start: e.target.value })
                 }
@@ -452,7 +527,7 @@ function RateModal({ rate, onClose, onSubmit, isLoading }: RateModalProps) {
               </label>
               <input
                 type="date"
-                value={formData.effective_end?.split('T')[0] || ''}
+                value={formData.effective_end?.toString().split('T')[0] || ''}
                 onChange={(e) =>
                   setFormData({
                     ...formData,
@@ -481,6 +556,61 @@ function RateModal({ rate, onClose, onSubmit, isLoading }: RateModalProps) {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  )
+}
+
+interface DeleteConfirmModalProps {
+  title: string
+  message: string
+  onClose: () => void
+  onConfirm: () => void
+  isLoading: boolean
+  error: string | null
+}
+
+function DeleteConfirmModal({ title, message, onClose, onConfirm, isLoading, error }: DeleteConfirmModalProps) {
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl shadow-xl max-w-md w-full mx-4">
+        <div className="flex items-center justify-between p-6 border-b border-slate-200">
+          <h2 className="text-xl font-bold text-slate-900">{title}</h2>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600"
+          >
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+
+        <div className="p-6">
+          {error && (
+            <div className="p-3 mb-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+              {error}
+            </div>
+          )}
+
+          <p className="text-slate-600">{message}</p>
+
+          <div className="flex justify-end space-x-3 mt-6">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={isLoading}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+            >
+              {isLoading ? 'Eliminando...' : 'Eliminar'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -568,7 +698,7 @@ function LookupModal({ onClose }: LookupModalProps) {
                     <div>
                       <span className="text-slate-600">Tarifa/Min:</span>
                       <span className="font-mono font-bold text-green-600 ml-2">
-                        ${result.rate_per_minute.toFixed(4)}
+                        ${Number(result.rate_per_minute).toFixed(4)}
                       </span>
                     </div>
                     <div>
@@ -580,7 +710,7 @@ function LookupModal({ onClose }: LookupModalProps) {
                     <div>
                       <span className="text-slate-600">Cargo Conexión:</span>
                       <span className="font-mono ml-2">
-                        ${result.connection_fee.toFixed(4)}
+                        ${Number(result.connection_fee).toFixed(4)}
                       </span>
                     </div>
                   </div>

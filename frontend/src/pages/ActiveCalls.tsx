@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchActiveCalls } from '../api/client'
 import { useWebSocket } from '../hooks/useWebSocket'
@@ -8,6 +9,15 @@ import type { ActiveCall } from '../types'
 
 export default function ActiveCalls() {
   const { isConnected, activeCalls: wsCalls } = useWebSocket()
+  const [, setTick] = useState(0)
+
+  // Update every second to refresh durations
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTick(t => t + 1)
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [])
 
   const { data: apiCalls = [], isLoading } = useQuery({
     queryKey: ['activeCalls'],
@@ -90,9 +100,15 @@ export default function ActiveCalls() {
     {
       key: 'duration_seconds',
       header: 'Duración',
-      render: (call: ActiveCall) => (
-        <span className="font-mono">{formatDuration(call.duration_seconds ?? call.duration ?? 0)}</span>
-      ),
+      render: (call: ActiveCall) => {
+        // Calculate real-time duration from start_time
+        const startTime = new Date(call.start_time).getTime()
+        const now = Date.now()
+        const durationSec = Math.max(0, Math.floor((now - startTime) / 1000))
+        return (
+          <span className="font-mono tabular-nums">{formatDuration(durationSec)}</span>
+        )
+      },
       className: 'text-right',
     },
     {
@@ -126,11 +142,19 @@ export default function ActiveCalls() {
     {
       key: 'estimated_cost',
       header: 'Costo Est.',
-      render: (call: ActiveCall) => (
-        <span className="font-mono text-slate-700">
-          {call.estimated_cost ? `$${call.estimated_cost.toFixed(4)}` : '-'}
-        </span>
-      ),
+      render: (call: ActiveCall) => {
+        // Calculate real-time cost based on duration and rate
+        const startTime = new Date(call.start_time).getTime()
+        const now = Date.now()
+        const durationSec = Math.max(0, Math.floor((now - startTime) / 1000))
+        const rate = call.rate_per_minute || 0
+        const cost = (durationSec / 60) * rate
+        return (
+          <span className="font-mono tabular-nums text-slate-700">
+            {rate > 0 ? `$${cost.toFixed(4)}` : '-'}
+          </span>
+        )
+      },
       className: 'text-right',
     },
   ]
@@ -188,10 +212,15 @@ export default function ActiveCalls() {
         </div>
         <div className="bg-white rounded-lg shadow-sm p-4 border border-slate-200">
           <p className="text-sm text-slate-500">Costo Total Est.</p>
-          <p className="text-2xl font-bold text-purple-600">
+          <p className="text-2xl font-bold tabular-nums text-purple-600">
             $
             {calls
-              .reduce((sum, c) => sum + (c.estimated_cost || 0), 0)
+              .reduce((sum, c) => {
+                const startTime = new Date(c.start_time).getTime()
+                const durationSec = Math.max(0, Math.floor((Date.now() - startTime) / 1000))
+                const rate = c.rate_per_minute || 0
+                return sum + (durationSec / 60) * rate
+              }, 0)
               .toFixed(2)}
           </p>
         </div>
