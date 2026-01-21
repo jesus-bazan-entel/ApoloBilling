@@ -228,6 +228,268 @@ Rates use Longest Prefix Match (LPM) on `destination_prefix`. The most specific 
 
 ---
 
+# FLUJO DE TARIFICACIÓN DEL MOTOR DE BILLING
+
+## Visión General
+
+El motor de billing (`rust-billing-engine`) procesa llamadas en **3 fases principales**, manejando eventos ESL (Event Socket Layer) de FreeSWITCH:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  FLUJO COMPLETO DE TARIFICACIÓN DE UNA LLAMADA             │
+└─────────────────────────────────────────────────────────────┘
+
+1️⃣  CHANNEL_CREATE (Incoming Call)
+    └─ Authorize call, verify account, find rate (LPM)
+       └─ Create initial balance reservation
+          └─ max_duration calculado
+
+2️⃣  CHANNEL_ANSWER (Call Connected)
+    └─ Start realtime monitoring
+       └─ Check every 180s if extension needed
+
+3️⃣  CHANNEL_HANGUP_COMPLETE (Call Ended)
+    └─ Stop monitoring
+       └─ Generate CDR + consume reservation
+          └─ Update account balance
+```
+
+## Fase 1: CHANNEL_CREATE - Autorización
+
+**Archivo:** `rust-billing-engine/src/services/authorization.rs`
+
+Cuando entra una llamada, `AuthorizationService.authorize()` ejecuta:
+
+```
+1. Busca cuenta por ANI (número llamante)
+   └─ Query: SELECT * FROM accounts WHERE account_number = $1
+   └─ Si no existe → DENY (reason: "account_not_found")
+
+2. Verifica estado de cuenta
+   └─ Si status != 'active' → DENY (reason: "account_suspended")
+
+3. Busca tarifa con LPM (Longest Prefix Match)
+   └─ Ver sección "Algoritmo LPM" abajo
+   └─ Si no hay tarifa → DENY (reason: "no_rate_found")
+
+4. Crea reserva de balance
+   └─ ReservationManager.create_reservation()
+   └─ Si balance insuficiente → DENY (reason: "insufficient_balance")
+```
+
+### Algoritmo LPM (Longest Prefix Match)
+
+Para destino `541156000`:
+
+```
+Step 1: Generar todos los prefijos
+        ["5", "54", "541", "5411", "54115", "541156", ...]
+
+Step 2: Query Database
+        SELECT * FROM rate_cards
+        WHERE destination_prefix IN (ALL prefixes)
+        AND effective_start <= NOW()
+        AND (effective_end IS NULL OR effective_end >= NOW())
+        ORDER BY LENGTH(destination_prefix) DESC, priority DESC
+        LIMIT 1
+
+Step 3: El prefijo más largo que coincida GANA
+        Ejemplo: si existe "5411" y "54115", prefiere "54115"
+```
+
+### Cálculo de Reserva Inicial
+
+```
+base = rate_per_minute × 5 minutos
+buffer = base × 8%
+total = clamp(base + buffer, $0.30, $30.00)
+max_duration = (total / rate_per_minute) × 60 segundos
+```
+
+**Ejemplo:**
+- Rate: $0.15/min
+- base = 0.15 × 5 = $0.75
+- buffer = $0.75 × 8% = $0.06
+- total = $0.81
+- max_duration = ($0.81 / 0.15) × 60 = 324 segundos (~5.4 min)
+
+## Fase 2: CHANNEL_ANSWER - Monitoreo en Tiempo Real
+
+**Archivo:** `rust-billing-engine/src/services/realtime_biller.rs`
+
+`RealtimeBiller` inicia un loop de monitoreo cada **180 segundos**:
+
+```
+for each active call:
+    time_remaining = max_duration - elapsed
+
+    if (time_remaining < 240 segundos):
+        ReservationManager.extend_reservation(+3 minutos)
+        └─ INSERT nueva fila en balance_reservations (type='extension')
+        └─ Actualiza max_duration en Redis
+```
+
+Esto permite llamadas largas sin cortar prematuramente por agotamiento de reserva.
+
+## Fase 3: CHANNEL_HANGUP_COMPLETE - Generación CDR
+
+**Archivo:** `rust-billing-engine/src/services/cdr_generator.rs`
+
+### Cálculo de Costo
+
+```
+1. Obtener billsec (segundos facturables) del evento ESL
+2. Redondear al billing_increment de la tarifa:
+   billsec_rounded = ceil(billsec / increment) × increment
+3. Convertir a minutos:
+   minutes = billsec_rounded / 60
+4. Calcular costo:
+   cost = minutes × rate_per_minute
+```
+
+**Ejemplo:**
+- billsec: 45 segundos
+- billing_increment: 6 segundos
+- billsec_rounded = ceil(45/6) × 6 = 48 segundos
+- minutes = 48/60 = 0.8
+- cost = 0.8 × $0.15 = $0.12
+
+### Inserción CDR
+
+```sql
+INSERT INTO cdrs (
+    uuid, account_id, caller, callee,
+    start_time, answer_time, end_time,
+    duration, billsec, hangup_cause,
+    rate_applied, cost, direction
+) VALUES (...)
+```
+
+### Consumo de Reserva
+
+**Archivo:** `rust-billing-engine/src/services/reservation_manager.rs`
+
+```
+ReservationManager.consume_reservation():
+│
+├─ BEGIN TRANSACTION (con row locks)
+│
+├─ Query reservas activas para la llamada:
+│   SELECT * FROM balance_reservations
+│   WHERE call_uuid = $1 AND status = 'active'
+│   FOR UPDATE
+│
+├─ Comparar actual_cost vs total_reserved:
+│
+│   CASO NORMAL (actual_cost <= reserved):
+│   ├─ UPDATE balance_reservations SET consumed_amount = actual_cost
+│   ├─ UPDATE accounts SET balance = balance - actual_cost
+│   └─ INSERT INTO balance_transactions (log)
+│
+│   CASO DEFICIT (actual_cost > reserved):
+│   ├─ Marcar todas las reservas como fully_consumed
+│   ├─ Descontar costo COMPLETO del balance (puede ir negativo)
+│   ├─ Si deficit > $10.00 → AUTO-SUSPEND cuenta
+│   └─ Log deficit transaction
+│
+└─ COMMIT + cleanup Redis
+```
+
+## Gestión de Reservas (Balance Reservations)
+
+### Ciclo de Vida
+
+```
+1. CREATE (CHANNEL_CREATE)
+   └─ INSERT balance_reservations (status='active', type='initial')
+
+2. EXTEND (durante llamada activa)
+   └─ INSERT balance_reservations (status='active', type='extension')
+
+3. CONSUME (CHANNEL_HANGUP_COMPLETE)
+   └─ UPDATE status='partially_consumed' o 'fully_consumed'
+   └─ Liberar amount no usado al balance
+
+4. EXPIRED (cleanup job)
+   └─ UPDATE status='expired' si expires_at < NOW()
+```
+
+### Control de Concurrencia
+
+- Máximo 5 llamadas simultáneas por cuenta (configurable)
+- Verificado en Redis: `SCARD active_reservations:{account_id}`
+
+## Ejemplo Completo de una Llamada
+
+```
+Cuenta: balance=$10.00, status=active
+Llamada: 5491234567890 → 5411567890 (Buenos Aires)
+Tarifa match: "5411" → $0.15/min, increment=6s
+Duración real: 45 segundos
+
+Timeline:
+─────────────────────────────────────────────────────────
+T+0ms     CHANNEL_CREATE
+          ├─ Account found ✓
+          ├─ Rate found: $0.15/min ✓
+          ├─ Reserva: $0.81 (5min + 8% buffer)
+          └─ max_duration: 324s
+
+T+50ms    CHANNEL_ANSWER
+          └─ Monitoreo iniciado (check cada 180s)
+
+T+45000ms CHANNEL_HANGUP_COMPLETE
+          ├─ billsec: 45s
+          ├─ billsec_rounded: 48s (ceil(45/6)*6)
+          ├─ cost: $0.12 (0.8min × $0.15)
+          ├─ CDR insertado
+          ├─ Reserva consumida: $0.12
+          └─ Balance: $10.00 - $0.12 = $9.88
+─────────────────────────────────────────────────────────
+```
+
+## Tablas de Base de Datos Involucradas
+
+| Tabla | Propósito |
+|-------|-----------|
+| `accounts` | Saldo, estado, tipo (prepaid/postpaid) |
+| `rate_cards` | Tarifas por prefijo (LPM) |
+| `balance_reservations` | Reservas activas durante llamadas |
+| `cdrs` | Registros de facturación finales |
+| `balance_transactions` | Log de movimientos de balance |
+
+## Archivos Clave del Motor
+
+| Archivo | Función |
+|---------|---------|
+| `services/authorization.rs` | Autoriza llamadas, busca tarifas LPM |
+| `services/realtime_biller.rs` | Monitorea llamadas activas, extiende reservas |
+| `services/cdr_generator.rs` | Genera CDR, calcula costo final |
+| `services/reservation_manager.rs` | CRUD de reservas de balance |
+| `esl/event_handler.rs` | Procesa eventos ESL de FreeSWITCH |
+
+## Manejo de Errores
+
+| Escenario | Acción |
+|-----------|--------|
+| Cuenta no encontrada | DENY + uuid_kill |
+| Cuenta suspendida | DENY + uuid_kill |
+| Sin tarifa para destino | DENY + uuid_kill |
+| Balance insuficiente | DENY + uuid_kill |
+| Límite concurrencia excedido | DENY + uuid_kill |
+| Deficit > $10.00 | Auto-suspend cuenta |
+
+## Cache Redis
+
+```
+rate:{prefix}              → Rate card data (TTL: 300s)
+call_session:{uuid}        → Session metadata (max_duration, start_time)
+reservation:{id}           → Reservation data (TTL: 2700s)
+active_reservations:{id}   → SET de reservation IDs por cuenta
+```
+
+---
+
 # GIT Y GITHUB
 
 ## Verificar Estado de Cambios
