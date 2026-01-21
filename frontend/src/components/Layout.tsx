@@ -36,7 +36,7 @@ export default function Layout({ children }: LayoutProps) {
     retry: false,
   })
 
-  const isOnline = health?.status === 'ok'
+  const isOnline = health?.status === 'ok' || health?.status === 'healthy'
 
   return (
     <div className="min-h-screen bg-slate-100">
