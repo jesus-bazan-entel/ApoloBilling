@@ -1,6 +1,6 @@
-import { Link, useLocation } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { checkHealth } from '../api/client'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { checkHealth, getCurrentUser, logout } from '../api/client'
 import {
   LayoutDashboard,
   Users,
@@ -10,6 +10,8 @@ import {
   Settings,
   Globe,
   Activity,
+  LogOut,
+  User,
 } from 'lucide-react'
 
 const navigation = [
@@ -28,6 +30,8 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const { data: health } = useQuery({
     queryKey: ['health'],
@@ -36,7 +40,23 @@ export default function Layout({ children }: LayoutProps) {
     retry: false,
   })
 
+  const { data: currentUser } = useQuery({
+    queryKey: ['currentUser'],
+    queryFn: getCurrentUser,
+    retry: false,
+  })
+
   const isOnline = health?.status === 'ok' || health?.status === 'healthy'
+
+  const handleLogout = async () => {
+    try {
+      await logout()
+      queryClient.clear()
+      navigate('/login')
+    } catch (error) {
+      console.error('Error al cerrar sesión:', error)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -92,6 +112,29 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Main content */}
       <main className="ml-64 min-h-screen">
+        {/* Header with user info and logout */}
+        <header className="bg-white shadow-sm border-b border-slate-200 sticky top-0 z-10">
+          <div className="flex items-center justify-end h-14 px-6">
+            {currentUser && (
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 text-slate-600">
+                  <User className="w-4 h-4" />
+                  <span className="text-sm font-medium">{currentUser.username}</span>
+                  <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">
+                    {currentUser.role}
+                  </span>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center gap-2 px-3 py-1.5 text-sm text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Cerrar Sesión</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </header>
         <div className="p-6">{children}</div>
       </main>
     </div>
