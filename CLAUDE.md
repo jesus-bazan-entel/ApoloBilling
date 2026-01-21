@@ -793,13 +793,93 @@ DELETE FROM active_calls WHERE call_uuid = $1
 
 ---
 
+## Página de Consulta de CDRs - Correcciones
+
+### Problema 1: Formato de Respuesta de Paginación
+
+**Archivo:** `frontend/src/api/client.ts`
+
+La API devuelve paginación anidada, pero el frontend esperaba campos planos:
+
+```typescript
+// API devuelve:
+{ data: [...], pagination: { total, page, per_page, total_pages } }
+
+// Frontend esperaba:
+{ data: [...], total, page, per_page, total_pages }
+```
+
+**Solución:** Transformar la respuesta en `fetchCDRs`:
+```typescript
+export const fetchCDRs = async (...): Promise<PaginatedResponse<CDR>> => {
+  const { data } = await api.get(`/cdrs?${params.toString()}`)
+
+  // Transform API response format
+  if (data.pagination) {
+    return {
+      data: data.data,
+      total: data.pagination.total,
+      page: data.pagination.page,
+      per_page: data.pagination.per_page,
+      total_pages: data.pagination.total_pages,
+    }
+  }
+  return data
+}
+```
+
+### Problema 2: Campo `cost` como String
+
+**Archivo:** `frontend/src/pages/CDR.tsx`
+
+La API devuelve `cost` como string (`"0.9000"`) en lugar de número, causando errores al hacer operaciones matemáticas.
+
+**Solución:** Parsear el costo a número:
+```typescript
+// Antes (fallaba):
+${(cdr.total_cost ?? cdr.cost ?? 0).toFixed(4)}
+
+// Después (correcto):
+const cost = parseFloat(String(cdr.total_cost ?? cdr.cost ?? 0)) || 0
+${cost.toFixed(4)}
+```
+
+### Problema 3: Campos `duration` y `billsec` Nulos
+
+**Archivo:** `frontend/src/pages/CDR.tsx`
+
+Los campos `duration` y `billsec` podían ser `null`, causando error en `formatDuration()`.
+
+**Solución:** Valor por defecto:
+```typescript
+// Antes:
+formatDuration(cdr.duration)
+
+// Después:
+formatDuration(cdr.duration ?? 0)
+formatDuration(cdr.billsec ?? 0)
+```
+
+### Cálculo del Total Facturado
+
+También corregido para parsear strings:
+```typescript
+{(data.data ?? []).reduce((sum, cdr) =>
+  sum + (parseFloat(String(cdr.total_cost ?? cdr.cost ?? 0)) || 0), 0
+).toFixed(2)}
+```
+
+---
+
 ## Resumen de Archivos Modificados
 
 | Archivo | Cambios |
 |---------|---------|
 | `frontend/src/pages/ActiveCalls.tsx` | Timer 1s, cálculo real-time duración/costo |
+| `frontend/src/pages/CDR.tsx` | Parseo de cost string→number, null checks |
 | `frontend/src/pages/Zones.tsx` | CRUD completo, modales edit/delete |
 | `frontend/src/pages/Rates.tsx` | Selector dropdown de zonas |
+| `frontend/src/api/client.ts` | Transformación respuesta paginación CDRs |
 | `frontend/src/hooks/useWebSocket.ts` | Manejo mensajes `active_calls`, `pong` |
 | `frontend/src/types/index.ts` | Zone: +zone_code, +region_name |
 | `rust-billing-engine/src/services/cdr_generator.rs` | Nombres columnas CDR |

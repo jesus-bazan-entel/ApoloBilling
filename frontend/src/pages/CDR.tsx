@@ -88,23 +88,26 @@ export default function CDRPage() {
     {
       key: 'duration',
       header: 'Duración',
-      render: (cdr: CDR) => formatDuration(cdr.duration),
+      render: (cdr: CDR) => formatDuration(cdr.duration ?? 0),
       className: 'text-right',
     },
     {
       key: 'billsec',
       header: 'Facturable',
-      render: (cdr: CDR) => formatDuration(cdr.billsec),
+      render: (cdr: CDR) => formatDuration(cdr.billsec ?? 0),
       className: 'text-right',
     },
     {
       key: 'total_cost',
       header: 'Costo',
-      render: (cdr: CDR) => (
-        <span className="font-mono font-medium text-slate-900">
-          ${(cdr.total_cost ?? cdr.cost ?? 0).toFixed(4)}
-        </span>
-      ),
+      render: (cdr: CDR) => {
+        const cost = parseFloat(String(cdr.total_cost ?? cdr.cost ?? 0)) || 0
+        return (
+          <span className="font-mono font-medium text-slate-900">
+            ${cost.toFixed(4)}
+          </span>
+        )
+      },
       className: 'text-right',
     },
     {
@@ -321,7 +324,7 @@ export default function CDRPage() {
           </div>
           <div className="text-sm text-slate-500">
             Total facturado: $
-            {(data.data ?? data.items ?? []).reduce((sum, cdr) => sum + (cdr.total_cost ?? cdr.cost ?? 0), 0).toFixed(2)}
+            {(data.data ?? data.items ?? []).reduce((sum, cdr) => sum + (parseFloat(String(cdr.total_cost ?? cdr.cost ?? 0)) || 0), 0).toFixed(2)}
           </div>
         </div>
       )}

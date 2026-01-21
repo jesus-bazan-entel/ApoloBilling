@@ -144,6 +144,19 @@ export const fetchCDRs = async (
   }
 
   const { data } = await api.get(`/cdrs?${params.toString()}`)
+
+  // Transform API response format to expected format
+  // API returns: { data: [...], pagination: { total, page, per_page, total_pages } }
+  // Frontend expects: { data: [...], total, page, per_page, total_pages }
+  if (data.pagination) {
+    return {
+      data: data.data,
+      total: data.pagination.total,
+      page: data.pagination.page,
+      per_page: data.pagination.per_page,
+      total_pages: data.pagination.total_pages,
+    }
+  }
   return data
 }
 
