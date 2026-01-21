@@ -1,7 +1,7 @@
 // src/services/reservation_manager.rs
 use crate::models::{ConsumeReservationRequest, ConsumeReservationResponse};
 use crate::database::DbPool;
-use crate::cache::{RedisClient, CacheKeys, CacheClient};
+use crate::cache::{RedisClient, CacheKeys};
 use crate::error::BillingError;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::{ToPrimitive, FromPrimitive};

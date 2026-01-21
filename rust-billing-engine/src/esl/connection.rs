@@ -78,7 +78,29 @@ impl EslConnection {
     pub async fn send_command(&self, command: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut stream = self.stream.lock().await;
         Self::write_command(&mut *stream, command).await?;
-        Self::read_response(&mut *stream).await
+
+        // Keep reading until we get a command response (not an event)
+        // Events have "Content-Type: text/event-plain"
+        // Command responses have "Content-Type: api/response" or "Content-Type: command/reply"
+        loop {
+            let response = Self::read_response(&mut *stream).await?;
+
+            // Check if this is a command response (not an event)
+            if response.contains("Content-Type: api/response")
+                || response.contains("Content-Type: command/reply")
+            {
+                return Ok(response);
+            }
+
+            // If it's an event, log and continue reading
+            if response.contains("Content-Type: text/event-plain") {
+                debug!("Skipping event while waiting for command response");
+                continue;
+            }
+
+            // Unknown response type, return it anyway
+            return Ok(response);
+        }
     }
 
     pub fn server_id(&self) -> &str {

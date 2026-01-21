@@ -68,6 +68,41 @@ cargo test                        # Run all tests
 cargo test --test full_integration_test   # Run integration tests
 ```
 
+### Rust Billing Engine - Systemd Service
+
+El motor de billing se ejecuta como servicio systemd (`apolo-billing-engine.service`).
+
+```bash
+# Recargar systemd (después de modificar el archivo .service)
+systemctl daemon-reload
+
+# Habilitar inicio automático
+systemctl enable apolo-billing-engine
+
+# Iniciar el servicio
+systemctl start apolo-billing-engine
+
+# Verificar estado
+systemctl status apolo-billing-engine
+```
+
+**Comandos útiles:**
+```bash
+# Ver logs en tiempo real
+journalctl -u apolo-billing-engine -f
+
+# Reiniciar servicio
+systemctl restart apolo-billing-engine
+
+# Detener servicio
+systemctl stop apolo-billing-engine
+
+# Ver últimos logs
+journalctl -u apolo-billing-engine -n 100
+```
+
+**Archivo de servicio:** `/etc/systemd/system/apolo-billing-engine.service`
+
 ## Key Entry Points
 
 - `rust-backend/src/main.rs` - Actix-web server setup, all API routes
