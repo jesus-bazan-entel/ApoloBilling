@@ -11,58 +11,52 @@ ApoloBilling is a real-time telecommunications billing platform for FreeSWITCH P
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                      React Frontend (:3000)                      │
+│                    (Proxy → localhost:8000)                      │
 └─────────────────────────────────────────────────────────────────┘
-              │                    │                    │
-              ▼                    ▼                    ▼
-┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
-│ Python FastAPI  │   │  Rust Backend   │   │  Rust Billing   │
-│   (:8000)       │   │  (:9001)        │   │  Engine (:9000) │
-│ CRUD, Dashboard │   │ CDR queries,    │   │ ESL, real-time  │
-│                 │   │ exports, stats  │   │ billing         │
-└────────┬────────┘   └────────┬────────┘   └────────┬────────┘
-         │                     │                     │
-         └─────────────────────┼─────────────────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │  PostgreSQL + Redis │
-                    └─────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Rust Backend (:8000)                        │
+│  - Auth (JWT + Argon2)        - CDRs (queries, export, stats)   │
+│  - Accounts CRUD + Topup      - Active Calls                    │
+│  - Rate Cards CRUD + LPM      - Reservations                    │
+│  - Zones/Prefixes/Tariffs     - Dashboard Stats                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+┌─────────────────────────┐     ┌─────────────────────────┐
+│   Rust Billing Engine   │     │   PostgreSQL + Redis    │
+│        (:9000)          │     │                         │
+│   ESL, real-time        │     │                         │
+│   billing               │     │                         │
+└─────────────────────────┘     └─────────────────────────┘
 ```
 
-**Four main components:**
+**Three main components:**
 - **frontend/** - React 19 + TypeScript + Vite SPA for dashboard UI
-- **backend/** - Python FastAPI REST API for CRUD operations
-- **rust-backend/** - High-performance Rust API for CDR queries (millions of records)
+- **rust-backend/** - High-performance Rust API (Actix-web) for all CRUD operations, CDR queries, authentication
 - **rust-billing-engine/** - Real-time billing processor via FreeSWITCH ESL
 
 ## Common Commands
 
-### Backend (Python/FastAPI)
+### Rust Backend (Main API Server)
 ```bash
-cd backend
-source venv/bin/activate
-pip install -r requirements.txt
-python main.py                    # Start server on :8000
-# OR: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-python init_db_clean.py           # Initialize/reset database
+cd rust-backend
+cp .env.example .env              # Configure database URL and settings
+cargo build --release
+cargo run --release               # Start server on :8000
+cargo test                        # Run tests
 ```
 
 ### Frontend (React/TypeScript)
 ```bash
 cd frontend
 npm install
-npm run dev        # Dev server on :3000 (proxies API to :9000)
+npm run dev        # Dev server on :3000 (proxies API to :8000)
 npm run build      # Production build (runs tsc then vite build)
 npm run lint       # ESLint check
 npm run preview    # Preview production build
-```
-
-### Rust Backend (High-Volume CDR API)
-```bash
-cd rust-backend
-cp .env.example .env              # Configure database URL
-cargo build --release
-cargo run                         # Start server on :9001
-cargo test                        # Run tests
 ```
 
 ### Rust Billing Engine
@@ -76,9 +70,8 @@ cargo test --test full_integration_test   # Run integration tests
 
 ## Key Entry Points
 
-- `backend/main.py` - FastAPI application setup, router registration
+- `rust-backend/src/main.rs` - Actix-web server setup, all API routes
 - `frontend/src/App.tsx` - React router and main app component
-- `rust-backend/src/main.rs` - High-volume CDR API server
 - `rust-billing-engine/src/main.rs` - Billing engine initialization
 
 ## Database Schema (PostgreSQL)
@@ -96,18 +89,6 @@ Core tables in `apolo_billing` database:
 2. **CHANNEL_ANSWER** → `RealtimeBiller` starts periodic reservation extensions
 3. **CHANNEL_HANGUP_COMPLETE** → `CdrGenerator` creates CDR, commits balance consumption
 
-## Backend API Structure
-
-```
-backend/app/
-├── api/routers/          # FastAPI routers (accounts, rates, rate_cards, management)
-├── models/               # SQLAlchemy models (billing.py, cdr.py, zones.py)
-├── schemas/              # Pydantic schemas
-├── services/             # Business logic (billing_sync.py, rating.py)
-├── db/                   # Database session and dependencies
-└── core/                 # Security (JWT, password hashing)
-```
-
 ## Frontend Structure
 
 ```
@@ -118,14 +99,23 @@ frontend/src/
 └── lib/utils.ts          # Utility functions
 ```
 
-## Rust Backend Structure (CDR API)
+## Rust Backend Structure (Main API)
 
 ```
 rust-backend/
-├── src/main.rs           # Actix-web server setup
+├── src/main.rs           # Actix-web server setup, route configuration
 └── crates/
     ├── apolo-api/        # HTTP handlers and DTOs
-    │   ├── handlers/cdr.rs    # CDR list, export, stats
+    │   ├── handlers/     # All API endpoint handlers
+    │   │   ├── auth.rs        # Login/logout/me/register
+    │   │   ├── account.rs     # CRUD cuentas + topup
+    │   │   ├── rate_card.rs   # Rate cards CRUD + LPM search
+    │   │   ├── rate.rs        # Rates legacy endpoints
+    │   │   ├── cdr.rs         # CDRs list, get, export, stats
+    │   │   ├── active_call.rs # Active calls + create CDR
+    │   │   ├── management.rs  # Zonas/Prefijos/Tarifas
+    │   │   ├── dashboard.rs   # Dashboard stats
+    │   │   └── reservation.rs # Balance reservations
     │   └── dto/               # Request/response types
     ├── apolo-db/         # PostgreSQL repositories
     ├── apolo-auth/       # JWT + Argon2 authentication
@@ -133,11 +123,49 @@ rust-backend/
     └── apolo-core/       # Shared models and traits
 ```
 
-**CDR API Endpoints (Port 9001):**
+**API Endpoints (Port 8000):**
+
+Authentication:
+- `POST /api/v1/auth/login` - Login, returns JWT in cookie
+- `POST /api/v1/auth/logout` - Clear cookie
+- `GET /api/v1/auth/me` - Current user info
+- `POST /api/v1/auth/register` - Create user (admin only)
+
+Accounts:
+- `GET /api/v1/accounts` - List with pagination
+- `POST /api/v1/accounts` - Create account
+- `GET/PUT /api/v1/accounts/{id}` - Get/update account
+- `POST /api/v1/accounts/{id}/topup` - Add balance
+
+Rate Cards:
+- `GET /api/v1/rate-cards` - List with filters
+- `POST /api/v1/rate-cards` - Create rate
+- `GET/PUT/DELETE /api/v1/rate-cards/{id}` - CRUD operations
+- `POST /api/v1/rate-cards/bulk` - Bulk import
+- `GET /api/v1/rate-cards/search/{phone}` - LPM search
+
+CDRs:
 - `GET /api/v1/cdrs` - List with pagination and filters
 - `GET /api/v1/cdrs/{id}` - Get single CDR
 - `GET /api/v1/cdrs/export` - Streaming export (CSV/JSON/JSONL)
 - `GET /api/v1/cdrs/stats` - Aggregated statistics
+- `POST /api/v1/cdrs` - Create CDR
+
+Active Calls & Reservations:
+- `GET /api/v1/active-calls` - List active calls
+- `POST /api/v1/active-calls` - Report/upsert call
+- `DELETE /api/v1/active-calls/{call_id}` - Remove call
+- `GET /api/v1/reservations` - List reservations
+
+Management (Zones/Prefixes/Tariffs):
+- `GET/POST /api/v1/zonas` - CRUD zones
+- `GET/POST /api/v1/prefijos` - CRUD prefixes
+- `GET/POST /api/v1/tarifas` - CRUD tariffs
+- `POST /api/v1/sync-rate-cards` - Sync rate cards
+
+Dashboard:
+- `GET /api/v1/stats` - Dashboard statistics
+- `GET /api/v1/health` - Health check
 
 ## Rust Billing Engine Structure
 
@@ -158,21 +186,28 @@ rust-billing-engine/src/
 ## Environment Variables
 
 ```bash
-# Database (shared by all backends)
+# Database (shared by all components)
 DATABASE_URL=postgresql://apolo_user:PASSWORD@localhost:5432/apolo_billing
+DATABASE_MAX_CONNECTIONS=20
 REDIS_URL=redis://localhost:6379
 
-# Rust Backend (CDR API)
-RUST_SERVER_PORT=9001
+# Rust Backend (Main API)
+RUST_SERVER_HOST=0.0.0.0
+RUST_SERVER_PORT=8000
 RUST_SERVER_WORKERS=4
-CORS_ORIGINS=http://localhost:3000
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+
+# JWT Authentication
+JWT_SECRET=apolo-billing-secret-key-change-in-production
+JWT_EXPIRATION_SECS=1800
 
 # Rust Billing Engine
 ESL_HOST=127.0.0.1
 ESL_PORT=8021
 
-# Python Backend
-JWT_SECRET=...
+# Logging
+LOG_LEVEL=info
+RUST_LOG=apolo_billing=debug,apolo_api=debug,actix_web=info
 ```
 
 ## Testing
@@ -418,175 +453,47 @@ Claude: (Aplica skill frontend-design)
 
 ---
 
-# MIGRACIÓN PYTHON → RUST BACKEND (Completada)
+# DEPLOYMENT
 
-## Resumen de la Migración
+## Quick Start
 
-El backend Python FastAPI (`:8000`) fue migrado completamente a Rust, consolidándolo con el `rust-backend` existente. El Rust backend ahora maneja TODOS los endpoints de la API en el puerto 8000.
-
-### Nueva Arquitectura (Post-Migración)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      React Frontend (:3000)                      │
-│                    (Proxy → localhost:8000)                      │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-              ┌───────────────────────────────┐
-              │      Rust Backend (:8000)      │
-              │  - Auth (JWT + Argon2)         │
-              │  - Accounts CRUD + Topup       │
-              │  - Rate Cards CRUD + LPM       │
-              │  - Zones/Prefixes/Tariffs      │
-              │  - CDRs (queries, export)      │
-              │  - Active Calls                │
-              │  - Reservations                │
-              │  - Dashboard Stats             │
-              └───────────────────────────────┘
-                              │
-                              ▼
-              ┌───────────────────────────────┐
-              │     PostgreSQL + Redis         │
-              └───────────────────────────────┘
-```
-
----
-
-## Fases de Migración Completadas
-
-### Fase 1: Autenticación
-**Archivos creados:**
-- `crates/apolo-api/src/dto/auth.rs` - DTOs para login/logout/register
-- `crates/apolo-api/src/handlers/auth.rs` - Handlers de autenticación
-
-**Endpoints:**
-```
-POST /api/v1/auth/login      → Login, retorna JWT en cookie
-POST /api/v1/auth/logout     → Limpia cookie
-GET  /api/v1/auth/me         → Info usuario actual
-POST /api/v1/auth/register   → Crear usuario (admin only)
-POST /api/v1/auth/change-password → Cambiar contraseña
-```
-
-### Fase 2: Gestión de Cuentas
-**Archivos creados:**
-- `crates/apolo-api/src/dto/account.rs`
-- `crates/apolo-api/src/handlers/account.rs`
-
-**Endpoints:**
-```
-GET    /api/v1/accounts          → Lista paginada
-POST   /api/v1/accounts          → Crear cuenta
-GET    /api/v1/accounts/{id}     → Obtener cuenta
-PUT    /api/v1/accounts/{id}     → Actualizar cuenta
-POST   /api/v1/accounts/{id}/topup → Recargar saldo
-```
-
-### Fase 3: Rate Cards CRUD
-**Archivos creados:**
-- `crates/apolo-api/src/dto/rate_card.rs`
-- `crates/apolo-api/src/handlers/rate_card.rs`
-
-**Endpoints:**
-```
-GET    /api/v1/rate-cards              → Lista con filtros
-POST   /api/v1/rate-cards              → Crear tarifa
-GET    /api/v1/rate-cards/{id}         → Obtener tarifa
-PUT    /api/v1/rate-cards/{id}         → Actualizar tarifa
-DELETE /api/v1/rate-cards/{id}         → Eliminar tarifa
-POST   /api/v1/rate-cards/bulk         → Importación masiva
-GET    /api/v1/rate-cards/search/{phone} → Búsqueda LPM
-```
-
-### Fase 4: Rates Legacy
-**Archivos creados:**
-- `crates/apolo-api/src/handlers/rate.rs`
-
-**Endpoints:**
-```
-GET    /api/v1/rates        → Alias de rate-cards
-POST   /api/v1/rates        → Crear rate
-DELETE /api/v1/rates/{id}   → Eliminar rate
-```
-
-### Fase 5: Zonas/Prefijos/Tarifas (Management)
-**Archivos creados:**
-- `crates/apolo-db/src/repositories/zone_repo.rs`
-- `crates/apolo-db/src/repositories/prefix_repo.rs`
-- `crates/apolo-db/src/repositories/tariff_repo.rs`
-- `crates/apolo-api/src/dto/management.rs`
-- `crates/apolo-api/src/handlers/management.rs`
-
-**Endpoints:**
-```
-GET/POST        /api/v1/zonas           → CRUD zonas
-PUT/DELETE      /api/v1/zonas/{id}
-GET/POST        /api/v1/prefijos        → CRUD prefijos
-DELETE          /api/v1/prefijos/{id}
-GET/POST        /api/v1/tarifas         → CRUD tarifas
-PUT/DELETE      /api/v1/tarifas/{id}
-POST            /api/v1/sync-rate-cards → Sincronizar
-```
-
-### Fase 6: Active Calls y CDR Creation
-**Archivos creados:**
-- `crates/apolo-db/src/repositories/active_call_repo.rs`
-- `crates/apolo-api/src/dto/active_call.rs`
-- `crates/apolo-api/src/handlers/active_call.rs`
-
-**Endpoints:**
-```
-GET    /api/v1/active-calls           → Lista llamadas activas
-POST   /api/v1/active-calls           → Reportar/upsert llamada
-DELETE /api/v1/active-calls/{call_id} → Remover llamada
-POST   /api/v1/cdrs                   → Crear CDR
-```
-
-### Fase 7: Integración Frontend
-**Archivos modificados:**
-
-| Archivo | Cambio |
-|---------|--------|
-| `frontend/vite.config.ts` | Proxy configurado a puerto 8000 |
-| `frontend/src/api/client.ts` | Actualizado para endpoints Rust |
-| `frontend/src/types/index.ts` | Tipos actualizados |
-| `frontend/src/pages/Balance.tsx` | Reescrito con Account/topup |
-| `frontend/src/pages/ActiveCalls.tsx` | Corregidos tipos |
-| `frontend/src/pages/CDR.tsx` | Corregidos tipos |
-| `frontend/src/pages/Dashboard.tsx` | Corregidos tipos |
-
-**Archivos creados en Rust:**
-| Archivo | Propósito |
-|---------|-----------|
-| `rust-backend/.env` | Configuración servidor (puerto 8000) |
-| `handlers/dashboard.rs` | Endpoint `/api/v1/stats` |
-| `handlers/reservation.rs` | Endpoints `/api/v1/reservations` |
-
----
-
-## Instrucciones de Despliegue
-
-### 1. Detener Python Backend
-```bash
-# Encontrar y detener proceso en puerto 8000
-PID=$(lsof -t -i :8000)
-if [ -n "$PID" ]; then
-    kill $PID
-fi
-```
-
-### 2. Iniciar Rust Backend
+### 1. Start Rust Backend
 ```bash
 cd /opt/ApoloBilling/rust-backend
-cargo run --release
-# O en background:
+cp .env.example .env              # Configure if needed
+cargo run --release               # Start server on :8000
+# Or in background:
 nohup cargo run --release > /tmp/rust-backend.log 2>&1 &
 ```
 
-### 3. Crear Tabla de Usuarios (Primera vez)
+### 2. Start Frontend
+```bash
+cd /opt/ApoloBilling/frontend
+npm install
+npm run dev                       # Dev server on :3000
+# Or for production:
+npm run build && npm run preview
+```
+
+### 3. Verify System
+```bash
+# Health check
+curl http://localhost:8000/api/v1/health
+
+# Login
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}' \
+  -c /tmp/cookies.txt
+
+# Test protected endpoint
+curl http://localhost:8000/api/v1/accounts -b /tmp/cookies.txt
+```
+
+## Database Setup (First Time)
+
+### Create Users Table
 ```sql
--- La tabla debe llamarse 'usuarios' con columna 'password'
 CREATE TABLE IF NOT EXISTS usuarios (
     id SERIAL PRIMARY KEY,
     username VARCHAR(100) NOT NULL UNIQUE,
@@ -604,20 +511,18 @@ CREATE TABLE IF NOT EXISTS usuarios (
 CREATE INDEX IF NOT EXISTS idx_usuarios_username ON usuarios(username);
 ```
 
-### 4. Crear Usuario Admin
+### Create Admin User
 ```bash
-# Generar hash Argon2 para la contraseña
+# Generate Argon2 hash for password
 cd /opt/ApoloBilling/rust-backend
 cargo run --example gen_hash -p apolo-auth
-# Esto genera el hash para "admin123"
 ```
 
 ```sql
--- Insertar admin (usar el hash generado)
 INSERT INTO usuarios (username, password, nombre, apellido, email, role, activo)
 VALUES (
     'admin',
-    '$argon2id$v=19$m=19456,t=2,p=1$...[hash generado]...',
+    '$argon2id$v=19$m=19456,t=2,p=1$...[generated_hash]...',
     'Administrador',
     'Sistema',
     'admin@apolobilling.com',
@@ -626,149 +531,35 @@ VALUES (
 );
 ```
 
-### 5. Iniciar Frontend
-```bash
-cd /opt/ApoloBilling/frontend
-npm run dev
-# Acceder a http://localhost:3000
-```
+## Default Credentials
 
----
-
-## Configuración del Rust Backend
-
-### Archivo: `rust-backend/.env`
-```bash
-# Database
-DATABASE_URL=postgresql://apolo_user:PASSWORD@localhost:5432/apolo_billing
-DATABASE_MAX_CONNECTIONS=20
-
-# Server - Puerto 8000 (reemplaza Python)
-RUST_SERVER_HOST=0.0.0.0
-RUST_SERVER_PORT=8000
-RUST_SERVER_WORKERS=4
-
-# CORS
-CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-
-# JWT
-JWT_SECRET=apolo-billing-secret-key-change-in-production
-JWT_EXPIRATION_SECS=1800
-
-# Logging
-LOG_LEVEL=info
-RUST_LOG=apolo_billing=debug,apolo_api=debug,actix_web=info
-```
-
-### Archivo: `frontend/vite.config.ts`
-```typescript
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  server: {
-    port: 3000,
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-      },
-      '/ws': {
-        target: 'ws://127.0.0.1:8000',
-        ws: true,
-      },
-    },
-  },
-})
-```
-
----
-
-## Credenciales por Defecto
-
-| Usuario | Contraseña | Rol |
-|---------|------------|-----|
+| User | Password | Role |
+|------|----------|------|
 | admin | admin123 | admin |
 
----
+## Important Notes
 
-## Verificación del Sistema
+1. **Users table**: Uses `usuarios` table with `password` column (not `users` or `password_hash`)
+2. **Password hashing**: Argon2id via `cargo run --example gen_hash -p apolo-auth`
+3. **Authentication**: JWT stored in HTTP-only cookie named `token`
+4. **Frontend proxy**: All `/api/*` requests proxied to Rust backend at :8000
 
-```bash
-# 1. Verificar Rust backend
-curl http://localhost:8000/api/v1/health
-# Respuesta: {"service":"apolo-billing-rust","status":"healthy","version":"1.0.0"}
-
-# 2. Verificar stats (público)
-curl http://localhost:8000/api/v1/stats
-
-# 3. Login y obtener cookie
-curl -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}' \
-  -c /tmp/cookies.txt
-
-# 4. Verificar endpoints protegidos
-curl http://localhost:8000/api/v1/accounts -b /tmp/cookies.txt
-curl http://localhost:8000/api/v1/auth/me -b /tmp/cookies.txt
-
-# 5. Verificar proxy frontend
-curl http://localhost:3000/api/v1/health
-```
-
----
-
-## Notas Importantes
-
-1. **Tabla de usuarios**: El Rust backend usa tabla `usuarios` (no `users`) con columna `password` (no `password_hash`)
-
-2. **Hashing de contraseñas**: Usar Argon2id. Generar con:
-   ```bash
-   cd rust-backend && cargo run --example gen_hash -p apolo-auth
-   ```
-
-3. **Autenticación**: JWT en cookie HTTP-only llamada `token`
-
-4. **Frontend proxy**: Todas las peticiones `/api/*` se redirigen automáticamente al backend Rust
-
-5. **Python backend**: Ya no es necesario. Puede eliminarse o mantenerse como backup
-
----
-
-## Estructura Final de Handlers Rust
-
-```
-rust-backend/crates/apolo-api/src/handlers/
-├── mod.rs              # Exports y configuración
-├── account.rs          # CRUD cuentas + topup
-├── active_call.rs      # Llamadas activas + crear CDR
-├── auth.rs             # Login/logout/me/register
-├── cdr.rs              # CDRs (list, get, export, stats)
-├── dashboard.rs        # Stats del dashboard
-├── management.rs       # Zonas/Prefijos/Tarifas
-├── rate.rs             # Rates legacy
-├── rate_card.rs        # Rate cards CRUD + LPM
-└── reservation.rs      # Reservaciones de saldo
-```
-
----
-
-## Comandos Útiles Post-Migración
+## Useful Commands
 
 ```bash
-# Compilar Rust backend
-cd /opt/ApoloBilling/rust-backend
-cargo build --release
+# Build backend
+cd /opt/ApoloBilling/rust-backend && cargo build --release
 
-# Ejecutar tests
+# Run tests
 cargo test
 
-# Ver logs en tiempo real
+# View logs
 tail -f /tmp/rust-backend.log
 
-# Reiniciar backend
+# Restart backend
 pkill -f apolo-billing
-cd /opt/ApoloBilling/rust-backend && nohup cargo run --release > /tmp/rust-backend.log 2>&1 &
+nohup cargo run --release > /tmp/rust-backend.log 2>&1 &
 
-# Compilar frontend
-cd /opt/ApoloBilling/frontend
-npm run build
+# Build frontend for production
+cd /opt/ApoloBilling/frontend && npm run build
 ```
