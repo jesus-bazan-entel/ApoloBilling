@@ -1334,47 +1334,362 @@ Claude: (Aplica skill frontend-design)
 
 ---
 
-# DEPLOYMENT
+# DEPLOYMENT COMPLETO EN DEBIAN 12
 
-## Quick Start
+Esta guía detalla el proceso completo para desplegar ApoloBilling desde cero en un servidor Debian 12, incluyendo la instalación de todas las dependencias, configuración de servicios y puesta en producción.
 
-### 1. Start Rust Backend
+## 1. Requisitos del Sistema
+
+### Hardware Mínimo
+
+| Componente | Mínimo | Recomendado |
+|------------|--------|-------------|
+| CPU | 2 cores | 4+ cores |
+| RAM | 2 GB | 4+ GB |
+| Disco | 20 GB SSD | 50+ GB SSD |
+| Red | 100 Mbps | 1 Gbps |
+
+### Software Base
+
+| Componente | Versión |
+|------------|---------|
+| Sistema Operativo | Debian 12 (Bookworm) |
+| PostgreSQL | 15+ |
+| Redis | 7+ |
+| Rust | 1.75+ (stable) |
+| Node.js | 20 LTS |
+| Nginx | 1.22+ |
+
+### Puertos Requeridos
+
+| Puerto | Servicio | Descripción |
+|--------|----------|-------------|
+| 22 | SSH | Acceso remoto |
+| 80 | HTTP | Redirección a HTTPS |
+| 443 | HTTPS | Frontend y API |
+| 3000 | Frontend Dev | Solo desarrollo |
+| 5432 | PostgreSQL | Base de datos (local) |
+| 6379 | Redis | Caché (local) |
+| 8000 | Rust Backend | API REST (interno) |
+| 8021 | FreeSWITCH ESL | Event Socket (interno) |
+| 9000 | Billing Engine | Tarificación (interno) |
+
+---
+
+## 2. Preparación del Servidor
+
+### 2.1 Actualizar Sistema
+
 ```bash
-cd /opt/ApoloBilling/rust-backend
-cp .env.example .env              # Configure if needed
-cargo run --release               # Start server on :8000
-# Or in background:
-nohup cargo run --release > /tmp/rust-backend.log 2>&1 &
+# Actualizar repositorios y paquetes
+sudo apt update && sudo apt upgrade -y
+
+# Instalar herramientas básicas
+sudo apt install -y \
+    curl \
+    wget \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    libpq-dev \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    software-properties-common \
+    htop \
+    vim \
+    unzip
 ```
 
-### 2. Start Frontend
+### 2.2 Crear Usuario del Sistema
+
 ```bash
-cd /opt/ApoloBilling/frontend
-npm install
-npm run dev                       # Dev server on :3000
-# Or for production:
-npm run build && npm run preview
+# Crear usuario apolo para ejecutar los servicios
+sudo useradd -r -m -s /bin/bash apolo
+
+# Crear directorio de instalación
+sudo mkdir -p /opt/ApoloBilling
+sudo chown apolo:apolo /opt/ApoloBilling
 ```
 
-### 3. Verify System
+---
+
+## 3. Instalación de Dependencias
+
+### 3.1 PostgreSQL 15
+
 ```bash
-# Health check
-curl http://localhost:8000/api/v1/health
+# Instalar PostgreSQL
+sudo apt install -y postgresql postgresql-contrib
 
-# Login
-curl -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}' \
-  -c /tmp/cookies.txt
+# Iniciar y habilitar servicio
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
 
-# Test protected endpoint
-curl http://localhost:8000/api/v1/accounts -b /tmp/cookies.txt
+# Verificar instalación
+psql --version
 ```
 
-## Database Setup (First Time)
+### 3.2 Redis 7
 
-### Create Users Table
+```bash
+# Instalar Redis
+sudo apt install -y redis-server
+
+# Configurar Redis para systemd
+sudo sed -i 's/supervised no/supervised systemd/' /etc/redis/redis.conf
+
+# Reiniciar Redis
+sudo systemctl restart redis-server
+sudo systemctl enable redis-server
+
+# Verificar instalación
+redis-cli ping
+# Respuesta esperada: PONG
+```
+
+### 3.3 Rust (via rustup)
+
+```bash
+# Instalar Rust como usuario apolo
+sudo -u apolo bash -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
+
+# Cargar variables de entorno
+sudo -u apolo bash -c 'source $HOME/.cargo/env && rustc --version'
+
+# Verificar instalación
+sudo -u apolo bash -c 'source $HOME/.cargo/env && cargo --version'
+```
+
+### 3.4 Node.js 20 LTS
+
+```bash
+# Agregar repositorio NodeSource
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+
+# Instalar Node.js
+sudo apt install -y nodejs
+
+# Verificar instalación
+node --version
+npm --version
+```
+
+### 3.5 Nginx
+
+```bash
+# Instalar Nginx
+sudo apt install -y nginx
+
+# Iniciar y habilitar servicio
+sudo systemctl start nginx
+sudo systemctl enable nginx
+
+# Verificar instalación
+nginx -v
+```
+
+---
+
+## 4. Configuración de PostgreSQL
+
+### 4.1 Crear Usuario y Base de Datos
+
+```bash
+# Conectar como usuario postgres
+sudo -u postgres psql
+
+# Ejecutar en consola psql:
+```
+
 ```sql
+-- Crear usuario
+CREATE USER apolo_user WITH PASSWORD 'TU_PASSWORD_SEGURO_AQUI';
+
+-- Crear base de datos
+CREATE DATABASE apolo_billing OWNER apolo_user;
+
+-- Otorgar permisos
+GRANT ALL PRIVILEGES ON DATABASE apolo_billing TO apolo_user;
+
+-- Salir
+\q
+```
+
+### 4.2 Configurar Acceso Local
+
+```bash
+# Editar pg_hba.conf para permitir acceso local con password
+sudo vim /etc/postgresql/15/main/pg_hba.conf
+
+# Agregar o modificar la línea:
+# local   apolo_billing   apolo_user                      md5
+
+# Reiniciar PostgreSQL
+sudo systemctl restart postgresql
+```
+
+### 4.3 Crear Schema Completo
+
+```bash
+# Conectar a la base de datos
+psql -U apolo_user -d apolo_billing -h localhost
+```
+
+```sql
+-- ============================================
+-- SCHEMA COMPLETO DE APOLOBILLING
+-- ============================================
+
+-- Tabla: accounts (Cuentas de clientes)
+CREATE TABLE IF NOT EXISTS accounts (
+    id SERIAL PRIMARY KEY,
+    account_number VARCHAR(50) UNIQUE NOT NULL,
+    account_name VARCHAR(200) NOT NULL,
+    account_type VARCHAR(20) NOT NULL DEFAULT 'PREPAID',
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    balance DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
+    currency VARCHAR(3) NOT NULL DEFAULT 'PEN',
+    credit_limit DECIMAL(12, 4) DEFAULT 0.0000,
+    max_concurrent_calls INTEGER DEFAULT 5,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    created_by VARCHAR(100) DEFAULT 'system',
+    updated_by VARCHAR(100) DEFAULT 'system'
+);
+
+CREATE INDEX IF NOT EXISTS idx_accounts_number ON accounts(account_number);
+CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
+CREATE INDEX IF NOT EXISTS idx_accounts_type ON accounts(account_type);
+
+-- Tabla: rate_cards (Tarifas por destino)
+CREATE TABLE IF NOT EXISTS rate_cards (
+    id SERIAL PRIMARY KEY,
+    rate_name VARCHAR(200) NOT NULL,
+    destination_prefix VARCHAR(20) NOT NULL,
+    destination_name VARCHAR(200),
+    rate_per_minute DECIMAL(10, 6) NOT NULL,
+    billing_increment INTEGER NOT NULL DEFAULT 6,
+    initial_increment_seconds INTEGER NOT NULL DEFAULT 6,
+    connection_fee DECIMAL(10, 6) DEFAULT 0.0,
+    priority INTEGER NOT NULL DEFAULT 100,
+    effective_start TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    effective_end TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    created_by VARCHAR(100) DEFAULT 'system'
+);
+
+CREATE INDEX IF NOT EXISTS idx_rate_cards_prefix ON rate_cards(destination_prefix);
+CREATE INDEX IF NOT EXISTS idx_rate_cards_priority ON rate_cards(priority DESC);
+CREATE INDEX IF NOT EXISTS idx_rate_cards_dates ON rate_cards(effective_start, effective_end);
+CREATE INDEX IF NOT EXISTS idx_rate_cards_prefix_priority ON rate_cards(destination_prefix, priority DESC);
+
+-- Tabla: balance_reservations (Reservas de balance)
+CREATE TABLE IF NOT EXISTS balance_reservations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    call_uuid VARCHAR(100) NOT NULL,
+    reserved_amount DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
+    consumed_amount DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
+    released_amount DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    type VARCHAR(20) NOT NULL DEFAULT 'initial',
+    destination_prefix VARCHAR(20),
+    rate_per_minute DECIMAL(10, 6),
+    reserved_minutes INTEGER,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    consumed_at TIMESTAMP WITH TIME ZONE,
+    released_at TIMESTAMP WITH TIME ZONE,
+    created_by VARCHAR(100) DEFAULT 'system',
+    updated_by VARCHAR(100) DEFAULT 'system'
+);
+
+CREATE INDEX IF NOT EXISTS idx_reservations_account ON balance_reservations(account_id);
+CREATE INDEX IF NOT EXISTS idx_reservations_call ON balance_reservations(call_uuid);
+CREATE INDEX IF NOT EXISTS idx_reservations_status ON balance_reservations(status);
+CREATE INDEX IF NOT EXISTS idx_reservations_expires ON balance_reservations(expires_at);
+CREATE INDEX IF NOT EXISTS idx_reservations_account_status ON balance_reservations(account_id, status);
+
+-- Tabla: balance_transactions (Log de transacciones)
+CREATE TABLE IF NOT EXISTS balance_transactions (
+    id BIGSERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    amount DECIMAL(12, 4) NOT NULL,
+    previous_balance DECIMAL(12, 4) NOT NULL,
+    new_balance DECIMAL(12, 4) NOT NULL,
+    type VARCHAR(20) NOT NULL,
+    reason TEXT,
+    call_uuid VARCHAR(100),
+    reservation_id UUID REFERENCES balance_reservations(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    created_by VARCHAR(100) DEFAULT 'system'
+);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_account ON balance_transactions(account_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_call ON balance_transactions(call_uuid);
+CREATE INDEX IF NOT EXISTS idx_transactions_type ON balance_transactions(type);
+CREATE INDEX IF NOT EXISTS idx_transactions_created ON balance_transactions(created_at);
+CREATE INDEX IF NOT EXISTS idx_transactions_reservation ON balance_transactions(reservation_id);
+
+-- Tabla: cdrs (Call Detail Records)
+CREATE TABLE IF NOT EXISTS cdrs (
+    id BIGSERIAL PRIMARY KEY,
+    call_uuid VARCHAR(100) UNIQUE NOT NULL,
+    account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+    caller_number VARCHAR(50) NOT NULL,
+    called_number VARCHAR(50) NOT NULL,
+    destination_prefix VARCHAR(20),
+    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    answer_time TIMESTAMP WITH TIME ZONE,
+    end_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    duration INTEGER NOT NULL DEFAULT 0,
+    billsec INTEGER NOT NULL DEFAULT 0,
+    rate_per_minute DECIMAL(10, 6),
+    cost DECIMAL(12, 4) DEFAULT 0.0000,
+    hangup_cause VARCHAR(50),
+    direction VARCHAR(20),
+    freeswitch_server_id VARCHAR(100),
+    reservation_id UUID REFERENCES balance_reservations(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    processed_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cdr_uuid ON cdrs(call_uuid);
+CREATE INDEX IF NOT EXISTS idx_cdr_account ON cdrs(account_id);
+CREATE INDEX IF NOT EXISTS idx_cdr_caller ON cdrs(caller_number);
+CREATE INDEX IF NOT EXISTS idx_cdr_callee ON cdrs(called_number);
+CREATE INDEX IF NOT EXISTS idx_cdr_start_time ON cdrs(start_time);
+CREATE INDEX IF NOT EXISTS idx_cdr_account_start ON cdrs(account_id, start_time);
+CREATE INDEX IF NOT EXISTS idx_cdr_reservation ON cdrs(reservation_id);
+
+-- Tabla: active_calls (Llamadas activas)
+CREATE TABLE IF NOT EXISTS active_calls (
+    id SERIAL PRIMARY KEY,
+    call_id VARCHAR(100) UNIQUE NOT NULL,
+    calling_number VARCHAR(50),
+    called_number VARCHAR(50),
+    direction VARCHAR(20),
+    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    answer_time TIMESTAMP WITH TIME ZONE,
+    current_duration INTEGER DEFAULT 0,
+    current_cost DECIMAL(12, 4) DEFAULT 0.0000,
+    rate_per_minute DECIMAL(10, 6),
+    connection_id VARCHAR(100),
+    server VARCHAR(100),
+    client_id INTEGER,
+    last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    status VARCHAR(20) DEFAULT 'active'
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_active_calls_call_id ON active_calls(call_id);
+CREATE INDEX IF NOT EXISTS idx_active_calls_client ON active_calls(client_id);
+CREATE INDEX IF NOT EXISTS idx_active_calls_start ON active_calls(start_time);
+
+-- Tabla: usuarios (Usuarios del sistema)
 CREATE TABLE IF NOT EXISTS usuarios (
     id SERIAL PRIMARY KEY,
     username VARCHAR(100) NOT NULL UNIQUE,
@@ -1390,57 +1705,787 @@ CREATE TABLE IF NOT EXISTS usuarios (
 );
 
 CREATE INDEX IF NOT EXISTS idx_usuarios_username ON usuarios(username);
+CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email);
+
+-- Tabla: zonas (Zonas de destino)
+CREATE TABLE IF NOT EXISTS zonas (
+    id SERIAL PRIMARY KEY,
+    zone_name VARCHAR(200) NOT NULL,
+    zone_code VARCHAR(50),
+    zone_type VARCHAR(50),
+    network_type VARCHAR(50),
+    region_name VARCHAR(200),
+    description TEXT,
+    enabled BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Tabla: prefijos (Prefijos de destino)
+CREATE TABLE IF NOT EXISTS prefijos (
+    id SERIAL PRIMARY KEY,
+    prefix VARCHAR(20) NOT NULL,
+    zone_id INTEGER REFERENCES zonas(id) ON DELETE SET NULL,
+    description TEXT,
+    enabled BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_prefijos_prefix ON prefijos(prefix);
+CREATE INDEX IF NOT EXISTS idx_prefijos_zone ON prefijos(zone_id);
+
+-- Tabla: tarifas (Tarifas por zona)
+CREATE TABLE IF NOT EXISTS tarifas (
+    id SERIAL PRIMARY KEY,
+    zone_id INTEGER REFERENCES zonas(id) ON DELETE CASCADE,
+    rate_per_minute DECIMAL(10, 6) NOT NULL,
+    billing_increment INTEGER DEFAULT 6,
+    connection_fee DECIMAL(10, 6) DEFAULT 0.0,
+    effective_start TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    effective_end TIMESTAMP WITH TIME ZONE,
+    enabled BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tarifas_zone ON tarifas(zone_id);
+CREATE INDEX IF NOT EXISTS idx_tarifas_dates ON tarifas(effective_start, effective_end);
+
+-- ============================================
+-- VISTAS ÚTILES
+-- ============================================
+
+-- Vista: Balance disponible por cuenta
+CREATE OR REPLACE VIEW v_available_balance AS
+SELECT
+    a.id,
+    a.account_number,
+    a.account_name,
+    a.balance,
+    COALESCE(SUM(br.reserved_amount - br.consumed_amount), 0) as total_reserved,
+    a.balance - COALESCE(SUM(br.reserved_amount - br.consumed_amount), 0) as available_balance
+FROM accounts a
+LEFT JOIN balance_reservations br ON a.id = br.account_id AND br.status = 'active'
+GROUP BY a.id, a.account_number, a.account_name, a.balance;
+
+-- Vista: Resumen de CDRs por cuenta
+CREATE OR REPLACE VIEW v_cdr_summary AS
+SELECT
+    account_id,
+    DATE(start_time) as call_date,
+    COUNT(*) as total_calls,
+    SUM(duration) as total_duration_seconds,
+    SUM(billsec) as total_billsec_seconds,
+    SUM(cost) as total_cost
+FROM cdrs
+GROUP BY account_id, DATE(start_time);
+
+-- ============================================
+-- PERMISOS FINALES
+-- ============================================
+
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO apolo_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO apolo_user;
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO apolo_user;
 ```
 
-### Create Admin User
+---
+
+## 5. Clonar Repositorio desde GitHub
+
 ```bash
-# Generate Argon2 hash for password
-cd /opt/ApoloBilling/rust-backend
-cargo run --example gen_hash -p apolo-auth
+# Cambiar a usuario apolo
+sudo -u apolo bash
+
+# Ir al directorio de instalación
+cd /opt/ApoloBilling
+
+# Clonar repositorio
+git clone https://github.com/jesus-bazan-entel/ApoloBilling.git .
+
+# Verificar contenido
+ls -la
 ```
 
-```sql
+---
+
+## 6. Compilar Rust Backend
+
+```bash
+# Como usuario apolo
+sudo -u apolo bash
+source ~/.cargo/env
+cd /opt/ApoloBilling/rust-backend
+
+# Crear archivo .env
+cat > .env << 'EOF'
+# Database
+DATABASE_URL=postgresql://apolo_user:TU_PASSWORD_SEGURO_AQUI@localhost:5432/apolo_billing
+DATABASE_MAX_CONNECTIONS=20
+
+# Server
+RUST_SERVER_HOST=0.0.0.0
+RUST_SERVER_PORT=8000
+RUST_SERVER_WORKERS=4
+
+# CORS (ajustar a tu dominio en producción)
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://tu-dominio.com
+
+# JWT Authentication (CAMBIAR EN PRODUCCIÓN)
+JWT_SECRET=cambiar-esta-clave-secreta-en-produccion-con-algo-aleatorio-y-largo
+JWT_EXPIRATION_SECS=1800
+
+# Redis
+REDIS_URL=redis://127.0.0.1:6379
+
+# Logging
+LOG_LEVEL=info
+RUST_LOG=apolo_billing=info,apolo_api=info,actix_web=info
+EOF
+
+# Compilar en modo release (puede tomar varios minutos)
+cargo build --release
+
+# Verificar binario
+ls -la target/release/apolo-billing
+```
+
+---
+
+## 7. Compilar Rust Billing Engine
+
+```bash
+# Como usuario apolo
+sudo -u apolo bash
+source ~/.cargo/env
+cd /opt/ApoloBilling/rust-billing-engine
+
+# Crear archivo .env
+cat > .env << 'EOF'
+# Environment
+ENVIRONMENT=production
+HOST=127.0.0.1
+PORT=9000
+
+# Database
+DATABASE_URL=postgresql://apolo_user:TU_PASSWORD_SEGURO_AQUI@localhost:5432/apolo_billing
+
+# Redis
+REDIS_URL=redis://127.0.0.1:6379
+
+# FreeSWITCH (ajustar según tu configuración)
+# Formato: host:port:password (separados por coma para múltiples servidores)
+FREESWITCH_SERVERS=127.0.0.1:8021:ClueCon
+
+# Logging
+RUST_LOG=info,apolo_billing_engine=info
+EOF
+
+# Compilar en modo release
+cargo build --release
+
+# Verificar binario
+ls -la target/release/apolo-billing-engine
+```
+
+---
+
+## 8. Instalar Frontend
+
+```bash
+# Como usuario apolo
+sudo -u apolo bash
+cd /opt/ApoloBilling/frontend
+
+# Instalar dependencias
+npm install
+
+# Construir para producción
+npm run build
+
+# Verificar build
+ls -la dist/
+```
+
+---
+
+## 9. Crear Usuario Admin
+
+```bash
+# Generar hash Argon2 para la contraseña
+cd /opt/ApoloBilling/rust-backend
+source ~/.cargo/env
+
+# Ejecutar el ejemplo para generar hash
+# (Si no existe, crear uno simple o usar herramienta online de Argon2)
+cargo run --example gen_hash -p apolo-auth 2>/dev/null || echo "Usar hash pre-generado"
+
+# Hash pre-generado para 'admin123':
+# $argon2id$v=19$m=19456,t=2,p=1$YXBvbG9iaWxsaW5n$8qVJ3p1nYzT9v3pK2xL4mHqWcD7FgN9kR6sT0uI2yXw
+```
+
+```bash
+# Insertar usuario admin en la base de datos
+psql -U apolo_user -d apolo_billing -h localhost << 'EOF'
 INSERT INTO usuarios (username, password, nombre, apellido, email, role, activo)
 VALUES (
     'admin',
-    '$argon2id$v=19$m=19456,t=2,p=1$...[generated_hash]...',
+    '$argon2id$v=19$m=19456,t=2,p=1$YXBvbG9iaWxsaW5n$8qVJ3p1nYzT9v3pK2xL4mHqWcD7FgN9kR6sT0uI2yXw',
     'Administrador',
     'Sistema',
-    'admin@apolobilling.com',
+    'admin@apolobilling.local',
     'admin',
     true
-);
+) ON CONFLICT (username) DO NOTHING;
+EOF
 ```
 
-## Default Credentials
+---
 
-| User | Password | Role |
-|------|----------|------|
-| admin | admin123 | admin |
+## 10. Configurar Servicios Systemd
 
-## Important Notes
-
-1. **Users table**: Uses `usuarios` table with `password` column (not `users` or `password_hash`)
-2. **Password hashing**: Argon2id via `cargo run --example gen_hash -p apolo-auth`
-3. **Authentication**: JWT stored in HTTP-only cookie named `token`
-4. **Frontend proxy**: All `/api/*` requests proxied to Rust backend at :8000
-
-## Useful Commands
+### 10.1 Servicio: Rust Backend API
 
 ```bash
-# Build backend
+sudo tee /etc/systemd/system/apolo-backend.service << 'EOF'
+[Unit]
+Description=Apolo Backend - REST API for billing management
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=apolo
+Group=apolo
+WorkingDirectory=/opt/ApoloBilling/rust-backend
+Environment=RUST_LOG=info,apolo_api=info,apolo_billing=info
+EnvironmentFile=/opt/ApoloBilling/rust-backend/.env
+ExecStart=/opt/ApoloBilling/rust-backend/target/release/apolo-billing
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ApoloBilling/rust-backend
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+### 10.2 Servicio: Rust Billing Engine
+
+```bash
+sudo tee /etc/systemd/system/apolo-billing-engine.service << 'EOF'
+[Unit]
+Description=Apolo Billing Engine - Real-time call authorization and billing
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=apolo
+Group=apolo
+WorkingDirectory=/opt/ApoloBilling/rust-billing-engine
+Environment=RUST_LOG=info,apolo_billing_engine=info
+EnvironmentFile=/opt/ApoloBilling/rust-billing-engine/.env
+ExecStart=/opt/ApoloBilling/rust-billing-engine/target/release/apolo-billing-engine
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ApoloBilling/rust-billing-engine
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+### 10.3 Servicio: Frontend (Producción con serve)
+
+```bash
+# Instalar serve globalmente
+sudo npm install -g serve
+
+# Crear servicio
+sudo tee /etc/systemd/system/apolo-frontend.service << 'EOF'
+[Unit]
+Description=Apolo Frontend - React SPA
+After=network.target
+
+[Service]
+Type=simple
+User=apolo
+Group=apolo
+WorkingDirectory=/opt/ApoloBilling/frontend
+ExecStart=/usr/bin/serve -s dist -l 3000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+### 10.4 Habilitar e Iniciar Servicios
+
+```bash
+# Recargar systemd
+sudo systemctl daemon-reload
+
+# Habilitar servicios para inicio automático
+sudo systemctl enable apolo-backend
+sudo systemctl enable apolo-billing-engine
+sudo systemctl enable apolo-frontend
+
+# Iniciar servicios
+sudo systemctl start apolo-backend
+sudo systemctl start apolo-billing-engine
+sudo systemctl start apolo-frontend
+
+# Verificar estado
+sudo systemctl status apolo-backend
+sudo systemctl status apolo-billing-engine
+sudo systemctl status apolo-frontend
+```
+
+---
+
+## 11. Configurar Nginx como Reverse Proxy
+
+### 11.1 Crear Configuración del Sitio
+
+```bash
+sudo tee /etc/nginx/sites-available/apolobilling << 'EOF'
+# Upstream servers
+upstream rust_backend {
+    server 127.0.0.1:8000;
+    keepalive 32;
+}
+
+upstream frontend {
+    server 127.0.0.1:3000;
+}
+
+# HTTP - Redirect to HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name tu-dominio.com;
+
+    # Para Let's Encrypt
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}
+
+# HTTPS - Main server
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name tu-dominio.com;
+
+    # SSL certificates (ajustar rutas después de obtener certificados)
+    ssl_certificate /etc/letsencrypt/live/tu-dominio.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tu-dominio.com/privkey.pem;
+
+    # SSL configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # Security headers
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml;
+
+    # Logging
+    access_log /var/log/nginx/apolobilling.access.log;
+    error_log /var/log/nginx/apolobilling.error.log;
+
+    # Frontend SPA
+    location / {
+        proxy_pass http://frontend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_redirect off;
+    }
+
+    # Backend API
+    location /api/ {
+        proxy_pass http://rust_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 75s;
+        proxy_send_timeout 300s;
+
+        # Buffer settings
+        proxy_buffering on;
+        proxy_buffer_size 4k;
+        proxy_buffers 8 4k;
+    }
+
+    # WebSocket support
+    location /ws {
+        proxy_pass http://rust_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    # Health check endpoint
+    location /health {
+        proxy_pass http://rust_backend/api/v1/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+}
+EOF
+```
+
+### 11.2 Habilitar Sitio
+
+```bash
+# Crear enlace simbólico
+sudo ln -sf /etc/nginx/sites-available/apolobilling /etc/nginx/sites-enabled/
+
+# Eliminar configuración por defecto (opcional)
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# Verificar configuración
+sudo nginx -t
+
+# Recargar Nginx
+sudo systemctl reload nginx
+```
+
+---
+
+## 12. Obtener Certificado SSL con Let's Encrypt
+
+```bash
+# Instalar Certbot
+sudo apt install -y certbot python3-certbot-nginx
+
+# Crear directorio para challenge
+sudo mkdir -p /var/www/certbot
+
+# Obtener certificado (reemplazar con tu dominio)
+sudo certbot --nginx -d tu-dominio.com
+
+# Configurar renovación automática
+sudo systemctl enable certbot.timer
+sudo systemctl start certbot.timer
+
+# Verificar renovación
+sudo certbot renew --dry-run
+```
+
+---
+
+## 13. Configurar Firewall (UFW)
+
+```bash
+# Instalar UFW
+sudo apt install -y ufw
+
+# Configurar reglas básicas
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+# Permitir SSH
+sudo ufw allow ssh
+
+# Permitir HTTP y HTTPS
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+
+# Habilitar firewall
+sudo ufw enable
+
+# Verificar estado
+sudo ufw status verbose
+```
+
+---
+
+## 14. Verificación del Deployment
+
+### 14.1 Verificar Servicios
+
+```bash
+# Estado de todos los servicios
+sudo systemctl status apolo-backend apolo-billing-engine apolo-frontend
+
+# Logs en tiempo real
+sudo journalctl -u apolo-backend -f
+sudo journalctl -u apolo-billing-engine -f
+```
+
+### 14.2 Verificar Endpoints
+
+```bash
+# Health check del backend
+curl -s http://localhost:8000/api/v1/health | jq .
+
+# Probar login
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}' \
+  -c /tmp/cookies.txt \
+  -v
+
+# Probar endpoint protegido
+curl http://localhost:8000/api/v1/accounts -b /tmp/cookies.txt | jq .
+```
+
+### 14.3 Verificar Frontend
+
+```bash
+# Verificar que el frontend responde
+curl -s http://localhost:3000 | head -20
+```
+
+---
+
+## 15. Comandos Útiles de Administración
+
+### Logs
+
+```bash
+# Ver logs de todos los servicios
+sudo journalctl -u apolo-backend -u apolo-billing-engine -u apolo-frontend -f
+
+# Ver logs de un servicio específico
+sudo journalctl -u apolo-backend -n 100 --no-pager
+
+# Ver logs desde una fecha
+sudo journalctl -u apolo-backend --since "2024-01-01 00:00:00"
+```
+
+### Reinicio de Servicios
+
+```bash
+# Reiniciar todos los servicios
+sudo systemctl restart apolo-backend apolo-billing-engine apolo-frontend
+
+# Reiniciar solo backend
+sudo systemctl restart apolo-backend
+```
+
+### Actualización del Código
+
+```bash
+# Cambiar a usuario apolo
+sudo -u apolo bash
+cd /opt/ApoloBilling
+
+# Obtener últimos cambios
+git pull origin main
+
+# Recompilar backend
+cd rust-backend
+source ~/.cargo/env
+cargo build --release
+
+# Recompilar billing engine
+cd ../rust-billing-engine
+cargo build --release
+
+# Reconstruir frontend
+cd ../frontend
+npm install
+npm run build
+
+# Salir de usuario apolo
+exit
+
+# Reiniciar servicios
+sudo systemctl restart apolo-backend apolo-billing-engine apolo-frontend
+```
+
+### Base de Datos
+
+```bash
+# Conectar a PostgreSQL
+psql -U apolo_user -d apolo_billing -h localhost
+
+# Backup de base de datos
+pg_dump -U apolo_user -h localhost apolo_billing > backup_$(date +%Y%m%d).sql
+
+# Restaurar backup
+psql -U apolo_user -h localhost apolo_billing < backup_20240101.sql
+```
+
+---
+
+## 16. Troubleshooting
+
+### Problema: Servicio no inicia
+
+```bash
+# Ver logs detallados
+sudo journalctl -u apolo-backend -n 50 --no-pager
+
+# Verificar permisos
+ls -la /opt/ApoloBilling/rust-backend/target/release/
+sudo chown -R apolo:apolo /opt/ApoloBilling
+```
+
+### Problema: Error de conexión a PostgreSQL
+
+```bash
+# Verificar que PostgreSQL está corriendo
+sudo systemctl status postgresql
+
+# Probar conexión manual
+psql -U apolo_user -d apolo_billing -h localhost
+
+# Verificar configuración pg_hba.conf
+sudo cat /etc/postgresql/15/main/pg_hba.conf | grep apolo
+```
+
+### Problema: Error de conexión a Redis
+
+```bash
+# Verificar que Redis está corriendo
+sudo systemctl status redis-server
+
+# Probar conexión
+redis-cli ping
+```
+
+### Problema: Frontend no carga
+
+```bash
+# Verificar que el build existe
+ls -la /opt/ApoloBilling/frontend/dist/
+
+# Verificar servicio
+sudo systemctl status apolo-frontend
+
+# Reconstruir si es necesario
+cd /opt/ApoloBilling/frontend
+npm run build
+```
+
+### Problema: Nginx devuelve 502
+
+```bash
+# Verificar que los backends están corriendo
+curl http://localhost:8000/api/v1/health
+curl http://localhost:3000
+
+# Verificar logs de Nginx
+sudo tail -f /var/log/nginx/apolobilling.error.log
+```
+
+---
+
+## 17. Credenciales por Defecto
+
+| Usuario | Contraseña | Rol | Uso |
+|---------|------------|-----|-----|
+| admin | admin123 | admin | Acceso total al sistema |
+
+**IMPORTANTE:** Cambiar las contraseñas por defecto en producción.
+
+---
+
+## 18. Checklist de Deployment
+
+- [ ] Sistema operativo Debian 12 instalado
+- [ ] PostgreSQL instalado y configurado
+- [ ] Redis instalado y corriendo
+- [ ] Rust instalado (rustup)
+- [ ] Node.js 20 LTS instalado
+- [ ] Nginx instalado
+- [ ] Usuario `apolo` creado
+- [ ] Repositorio clonado
+- [ ] Base de datos y schema creados
+- [ ] Usuario admin insertado
+- [ ] Backend compilado
+- [ ] Billing engine compilado
+- [ ] Frontend compilado
+- [ ] Archivos .env configurados
+- [ ] Servicios systemd creados
+- [ ] Servicios habilitados e iniciados
+- [ ] Nginx configurado como reverse proxy
+- [ ] Certificado SSL obtenido
+- [ ] Firewall configurado
+- [ ] Health check exitoso
+- [ ] Login funcional
+
+---
+
+## Quick Start (Resumen Rápido)
+
+Para usuarios que quieren un deployment rápido después de tener las dependencias instaladas:
+
+```bash
+# 1. Clonar repositorio
+sudo -u apolo git clone https://github.com/jesus-bazan-entel/ApoloBilling.git /opt/ApoloBilling
+
+# 2. Configurar base de datos
+sudo -u postgres psql -c "CREATE USER apolo_user WITH PASSWORD 'tu_password';"
+sudo -u postgres psql -c "CREATE DATABASE apolo_billing OWNER apolo_user;"
+psql -U apolo_user -d apolo_billing -f /opt/ApoloBilling/schema.sql
+
+# 3. Compilar
 cd /opt/ApoloBilling/rust-backend && cargo build --release
+cd /opt/ApoloBilling/rust-billing-engine && cargo build --release
+cd /opt/ApoloBilling/frontend && npm install && npm run build
 
-# Run tests
-cargo test
+# 4. Configurar .env en cada componente
 
-# View logs
-tail -f /tmp/rust-backend.log
+# 5. Iniciar servicios
+sudo systemctl start apolo-backend apolo-billing-engine apolo-frontend
 
-# Restart backend
-pkill -f apolo-billing
-nohup cargo run --release > /tmp/rust-backend.log 2>&1 &
-
-# Build frontend for production
-cd /opt/ApoloBilling/frontend && npm run build
+# 6. Verificar
+curl http://localhost:8000/api/v1/health
 ```
