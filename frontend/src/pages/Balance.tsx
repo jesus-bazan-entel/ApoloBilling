@@ -88,7 +88,7 @@ export default function BalancePage() {
                 : 'text-red-600'
             }`}
           >
-            ${balance.toFixed(2)}
+            S/{balance.toFixed(2)}
           </span>
         )
       },
@@ -162,7 +162,7 @@ export default function BalancePage() {
         <div className="bg-white rounded-lg shadow-sm p-4 border border-slate-200">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-slate-500">Saldo Bajo (&lt; $5)</p>
+              <p className="text-sm text-slate-500">Saldo Bajo (&lt; S/5)</p>
               <p className="text-2xl font-bold text-red-600">
                 {lowBalanceAccounts}
               </p>
@@ -175,7 +175,7 @@ export default function BalancePage() {
             <div>
               <p className="text-sm text-slate-500">Saldo Total</p>
               <p className="text-2xl font-bold text-green-600">
-                ${totalBalance.toFixed(2)}
+                S/{totalBalance.toFixed(2)}
               </p>
             </div>
             <DollarSign className="w-8 h-8 text-green-500" />
@@ -204,7 +204,7 @@ export default function BalancePage() {
             <TrendingUp className="w-5 h-5 text-red-600 mr-2" />
             <span className="text-red-800 font-medium">
               Atención: {lowBalanceAccounts} cuenta{lowBalanceAccounts > 1 ? 's' : ''}{' '}
-              con saldo bajo (menos de $5.00)
+              con saldo bajo (menos de S/5.00)
             </span>
           </div>
         </div>
@@ -304,14 +304,14 @@ function RechargeModal({
               <div>
                 <p className="text-sm text-slate-500">Saldo Actual</p>
                 <p className="text-xl font-bold text-slate-900">
-                  ${currentBalance.toFixed(2)}
+                  S/{currentBalance.toFixed(2)}
                 </p>
               </div>
               {amount > 0 && (
                 <div>
                   <p className="text-sm text-slate-500">Nuevo Saldo</p>
                   <p className="text-xl font-bold text-green-600">
-                    ${newBalance.toFixed(2)}
+                    S/{newBalance.toFixed(2)}
                   </p>
                 </div>
               )}
@@ -335,7 +335,7 @@ function RechargeModal({
                       : 'border-slate-300 text-slate-700 hover:bg-slate-50'
                   }`}
                 >
-                  ${value}
+                  S/{value}
                 </button>
               ))}
             </div>
@@ -348,7 +348,7 @@ function RechargeModal({
             </label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500 font-medium">
-                $
+                S/
               </span>
               <input
                 type="number"

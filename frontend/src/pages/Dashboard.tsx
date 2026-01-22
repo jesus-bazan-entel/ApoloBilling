@@ -124,7 +124,7 @@ export default function Dashboard() {
       key: 'estimated_cost',
       header: 'Costo Est.',
       render: (call: ActiveCall) =>
-        call.estimated_cost ? `$${call.estimated_cost.toFixed(4)}` : '-',
+        call.estimated_cost ? `S/${call.estimated_cost.toFixed(4)}` : '-',
       className: 'text-right',
     },
   ]
@@ -150,7 +150,7 @@ export default function Dashboard() {
       header: 'Reservado',
       render: (r: Reservation) => (
         <span className="text-blue-600 font-medium">
-          ${r.reserved_amount.toFixed(4)}
+          S/{r.reserved_amount.toFixed(4)}
         </span>
       ),
       className: 'text-right',
@@ -159,7 +159,7 @@ export default function Dashboard() {
       key: 'consumed_amount',
       header: 'Consumido',
       render: (r: Reservation) => (
-        <span className="text-green-600">${r.consumed_amount.toFixed(4)}</span>
+        <span className="text-green-600">S/{r.consumed_amount.toFixed(4)}</span>
       ),
       className: 'text-right',
     },
@@ -214,7 +214,7 @@ export default function Dashboard() {
           />
           <StatCard
             title="Saldo Total"
-            value={`$${stats.total_balance.toLocaleString('es-ES', {
+            value={`S/${stats.total_balance.toLocaleString('es-ES', {
               minimumFractionDigits: 2,
             })}`}
             icon={DollarSign}
@@ -222,7 +222,7 @@ export default function Dashboard() {
           />
           <StatCard
             title="Ingresos Hoy"
-            value={`$${(stats.revenue_today ?? 0).toFixed(2)}`}
+            value={`S/${(stats.revenue_today ?? 0).toFixed(2)}`}
             subtitle={`${stats.cdrs_today ?? stats.calls_today ?? 0} llamadas`}
             icon={TrendingUp}
             color="green"
@@ -242,7 +242,7 @@ export default function Dashboard() {
           <StatCard
             title="Reservas Activas"
             value={stats.active_reservations || reservations.length}
-            subtitle={`$${(stats.reserved_amount ?? 0).toFixed(2)} reservado`}
+            subtitle={`S/${(stats.reserved_amount ?? 0).toFixed(2)} reservado`}
             icon={Clock}
             color="yellow"
           />
@@ -255,7 +255,7 @@ export default function Dashboard() {
           />
           <StatCard
             title="Ingresos Hoy"
-            value={`$${(stats.revenue_today ?? stats.revenue_this_month ?? 0).toFixed(2)}`}
+            value={`S/${(stats.revenue_today ?? stats.revenue_this_month ?? 0).toFixed(2)}`}
             icon={CreditCard}
             color="green"
           />
@@ -319,7 +319,7 @@ export default function Dashboard() {
                   border: '1px solid #e2e8f0',
                   borderRadius: '8px',
                 }}
-                formatter={(value) => `$${value}`}
+                formatter={(value) => `S/${value}`}
               />
               <Bar
                 dataKey="ingresos"
@@ -388,7 +388,7 @@ export default function Dashboard() {
                   border: '1px solid #e2e8f0',
                   borderRadius: '8px',
                 }}
-                formatter={(value) => `$${Number(value).toFixed(2)}`}
+                formatter={(value) => `S/${Number(value).toFixed(2)}`}
               />
               <Area
                 type="monotone"

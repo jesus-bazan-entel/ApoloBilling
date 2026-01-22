@@ -111,7 +111,42 @@ impl EventHandler {
 
         info!("📞 CHANNEL_CREATE (a-leg): {} - {} → {} [{}]", uuid, caller, callee, direction);
 
-        // Authorize call
+        // 🔍 Check if call was already authorized via HTTP endpoint (dialplan curl)
+        // This prevents duplicate reservations
+        let already_authorized = if let Ok(client) = self.db_pool.get().await {
+            match client.query_opt(
+                "SELECT id FROM balance_reservations WHERE call_uuid = $1 AND status = 'active' LIMIT 1",
+                &[&uuid]
+            ).await {
+                Ok(Some(_)) => {
+                    info!("⏭️  Call {} already authorized via HTTP, skipping ESL authorization", uuid);
+                    true
+                }
+                Ok(None) => false,
+                Err(e) => {
+                    error!("Error checking existing reservation: {}", e);
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
+        if already_authorized {
+            // Insert into active_calls if not already there
+            if let Ok(client) = self.db_pool.get().await {
+                let now = Utc::now();
+                let _ = client.execute(
+                    "INSERT INTO active_calls (call_id, calling_number, called_number, direction, start_time, current_duration, current_cost, server)
+                     VALUES ($1, $2, $3, $4, $5, 0, 0, $6)
+                     ON CONFLICT (call_id) DO NOTHING",
+                    &[&uuid, &caller, &callee, &direction, &now, &self.server_id]
+                ).await;
+            }
+            return;
+        }
+
+        // Authorize call (only if not already authorized via HTTP)
         let auth_req = AuthRequest {
             caller: caller.clone(),
             callee: callee.clone(),
@@ -182,6 +217,22 @@ impl EventHandler {
         }
 
         info!("✅ CHANNEL_ANSWER (a-leg): {}", uuid);
+
+        // Update active_calls table with answer_time and status
+        if let Ok(client) = self.db_pool.get().await {
+            let now = Utc::now();
+            match client.execute(
+                "UPDATE active_calls SET answer_time = $1, status = 'answered' WHERE call_id = $2",
+                &[&now, &uuid]
+            ).await {
+                Ok(rows) => {
+                    if rows > 0 {
+                        info!("📞 Updated call {} to answered status", uuid);
+                    }
+                }
+                Err(e) => error!("❌ Failed to update answer_time for call {}: {}", uuid, e),
+            }
+        }
 
         // Start realtime billing for prepaid
         // TODO: Get account type from session

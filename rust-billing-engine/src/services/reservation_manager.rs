@@ -294,10 +294,16 @@ impl ReservationManager {
         let client = self.db_pool.get().await
             .map_err(|e| BillingError::Internal(e.to_string()))?;
 
-        let balance_row = client
-            .query_one("SELECT balance FROM accounts WHERE id = $1", &[&account_id_i32])
+        // Get balance, credit_limit, and account_type
+        let account_row = client
+            .query_one(
+                "SELECT balance, COALESCE(credit_limit, 0), account_type FROM accounts WHERE id = $1",
+                &[&account_id_i32],
+            )
             .await?;
-        let balance: Decimal = balance_row.get(0);
+        let balance: Decimal = account_row.get(0);
+        let credit_limit: Decimal = account_row.get(1);
+        let account_type: String = account_row.get(2);
 
         let reserved_row = client
             .query_one(
@@ -309,7 +315,19 @@ impl ReservationManager {
             .await?;
         let total_reserved: Decimal = reserved_row.get(0);
 
-        Ok(balance - total_reserved)
+        // For postpaid accounts, add credit_limit to available balance
+        let available = if account_type.to_lowercase() == "postpaid" {
+            balance + credit_limit - total_reserved
+        } else {
+            balance - total_reserved
+        };
+
+        info!(
+            "Available balance for account {}: balance=${}, credit_limit=${}, reserved=${}, available=${} (type={})",
+            account_id, balance, credit_limit, total_reserved, available, account_type
+        );
+
+        Ok(available)
     }
 
     async fn check_concurrent_limits(

@@ -525,6 +525,225 @@ active_reservations:{id}   → SET de reservation IDs por cuenta
 
 ---
 
+# SISTEMA DE RESERVA DE SALDO (Balance Reservations)
+
+## Propósito
+
+El sistema de reserva de saldo garantiza que una cuenta tenga fondos suficientes durante toda la duración de una llamada. Es el mecanismo central que previene llamadas sin fondos y permite el cobro correcto al finalizar.
+
+## Flujo Completo de Reserva
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  LLAMADA INICIA (CHANNEL_CREATE)                            │
+├─────────────────────────────────────────────────────────────┤
+│  Balance: S/10.00                                           │
+│  Tarifa:  S/0.15/min                                        │
+│  Reserva: S/0.81 (5 min + 8% buffer)                        │
+│  Balance después: S/10.00 - S/0.81 = S/9.19                 │
+│  max_duration: 324s                                         │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼ (180s después, si queda < 240s)
+┌─────────────────────────────────────────────────────────────┐
+│  EXTENSIÓN DE RESERVA                                       │
+├─────────────────────────────────────────────────────────────┤
+│  Extensión: +S/0.45 (3 min adicionales)                     │
+│  Balance: S/9.19 - S/0.45 = S/8.74                          │
+│  max_duration: 324s + 180s = 504s                           │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼ (llamada termina a los 45s)
+┌─────────────────────────────────────────────────────────────┐
+│  CONSUMO (CHANNEL_HANGUP)                                   │
+├─────────────────────────────────────────────────────────────┤
+│  Duración real: 45s                                         │
+│  billsec_rounded: 48s (increment=6s)                        │
+│  Costo real: (48/60) × S/0.15 = S/0.12                      │
+│  Reservado: S/0.81                                          │
+│  Excedente devuelto: S/0.81 - S/0.12 = S/0.69               │
+│  Balance final: S/9.19 + S/0.69 = S/9.88                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Fase 1: Creación de Reserva (CHANNEL_CREATE)
+
+**Archivo:** `rust-billing-engine/src/services/authorization.rs`
+
+Cuando inicia una llamada, el sistema ejecuta:
+
+```
+1. Busca la cuenta por número llamante (ANI)
+   └─ Query: SELECT * FROM accounts WHERE account_number = $1
+   └─ Si no existe → DENY (reason: "account_not_found")
+
+2. Verifica estado de cuenta
+   └─ Si status != 'active' → DENY (reason: "account_suspended")
+
+3. Busca tarifa con LPM (Longest Prefix Match)
+   └─ Si no hay tarifa → DENY (reason: "no_rate_found")
+
+4. Calcula la reserva inicial:
+   base = rate_per_minute × 5 minutos
+   buffer = base × 8%
+   total = clamp(base + buffer, S/0.30, S/30.00)
+   max_duration = (total / rate_per_minute) × 60 segundos
+
+5. Crea reserva de balance
+   └─ ReservationManager.create_reservation()
+   └─ Descuenta del balance disponible
+   └─ Si balance insuficiente → DENY (reason: "insufficient_balance")
+```
+
+### Ejemplo de Cálculo
+
+| Parámetro | Valor |
+|-----------|-------|
+| Tarifa | S/0.15/min |
+| Base (5 min) | S/0.15 × 5 = S/0.75 |
+| Buffer (8%) | S/0.75 × 0.08 = S/0.06 |
+| **Total Reserva** | **S/0.81** |
+| max_duration | (S/0.81 / S/0.15) × 60 = **324 seg** |
+
+## Fase 2: Extensión de Reserva (Durante la llamada)
+
+**Archivo:** `rust-billing-engine/src/services/realtime_biller.rs`
+
+El `RealtimeBiller` monitorea cada **180 segundos**:
+
+```rust
+for each active_call:
+    time_remaining = max_duration - elapsed
+
+    if time_remaining < 240 segundos:
+        extend_reservation(+3 minutos)
+        // Descuenta más saldo del balance
+        // Actualiza max_duration en Redis
+```
+
+Esto permite llamadas largas sin cortes prematuros por agotamiento de reserva.
+
+## Fase 3: Consumo de Reserva (CHANNEL_HANGUP)
+
+**Archivo:** `rust-billing-engine/src/services/reservation_manager.rs`
+
+```
+ReservationManager.consume_reservation():
+│
+├─ BEGIN TRANSACTION (con row locks)
+│
+├─ Query reservas activas para la llamada:
+│   SELECT * FROM balance_reservations
+│   WHERE call_uuid = $1 AND status = 'active'
+│   FOR UPDATE
+│
+├─ Calcula costo real:
+│   billsec_rounded = ceil(billsec / increment) × increment
+│   cost = (billsec_rounded / 60) × rate_per_minute
+│
+├─ Compara actual_cost vs total_reserved:
+│
+│   CASO NORMAL (actual_cost <= reserved):
+│   ├─ UPDATE balance_reservations SET consumed_amount = actual_cost
+│   ├─ Devuelve excedente: balance += (reserved - actual_cost)
+│   └─ INSERT INTO balance_transactions (log)
+│
+│   CASO DEFICIT (actual_cost > reserved):
+│   ├─ Marcar todas las reservas como fully_consumed
+│   ├─ Descontar costo COMPLETO del balance (puede ir negativo)
+│   ├─ Si deficit > S/10.00 → AUTO-SUSPEND cuenta
+│   └─ Log deficit transaction
+│
+└─ COMMIT + cleanup Redis
+```
+
+## Tablas de Base de Datos
+
+### balance_reservations
+
+```sql
+CREATE TABLE balance_reservations (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER REFERENCES accounts(id),
+    call_uuid VARCHAR(100) NOT NULL,
+    reserved_amount DECIMAL(12,4) NOT NULL,
+    consumed_amount DECIMAL(12,4) DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'active',  -- active, partially_consumed, fully_consumed, expired
+    type VARCHAR(20) NOT NULL,            -- initial, extension
+    destination_prefix VARCHAR(20),
+    rate_per_minute DECIMAL(10,6),
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_reservations_call_uuid ON balance_reservations(call_uuid);
+CREATE INDEX idx_reservations_account_status ON balance_reservations(account_id, status);
+```
+
+### balance_transactions
+
+```sql
+CREATE TABLE balance_transactions (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER REFERENCES accounts(id),
+    amount DECIMAL(12,4) NOT NULL,
+    type VARCHAR(20) NOT NULL,        -- reservation, consumption, refund, topup, deficit
+    reference_id VARCHAR(100),        -- call_uuid o reservation_id
+    balance_before DECIMAL(12,4),
+    balance_after DECIMAL(12,4),
+    description TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+```
+
+## Estados de Reserva
+
+| Estado | Descripción |
+|--------|-------------|
+| `active` | Reserva vigente durante llamada activa |
+| `partially_consumed` | Llamada terminó, se usó parte de la reserva |
+| `fully_consumed` | Llamada terminó, se usó toda la reserva |
+| `expired` | Reserva expiró sin consumirse (cleanup job) |
+
+## Control de Concurrencia
+
+- **Máximo 5 llamadas simultáneas** por cuenta (configurable)
+- Verificado en Redis: `SCARD active_reservations:{account_id}`
+- Si se excede el límite → llamada denegada
+
+## Manejo de Déficit
+
+Cuando el costo real excede lo reservado:
+
+```
+SI deficit <= S/10.00:
+    └─ Se permite, balance puede ir negativo temporalmente
+
+SI deficit > S/10.00:
+    ├─ Se cobra el costo completo
+    ├─ Cuenta se SUSPENDE automáticamente
+    └─ Log: "Auto-suspended due to excessive deficit"
+```
+
+## Cache Redis para Reservas
+
+```
+reservation:{id}           → Datos de reserva (TTL: 2700s / 45min)
+active_reservations:{id}   → SET de reservation IDs activos por cuenta
+call_session:{uuid}        → Metadata de sesión (max_duration, start_time, rate)
+```
+
+## Archivos Clave
+
+| Archivo | Función |
+|---------|---------|
+| `services/reservation_manager.rs` | CRUD de reservas, consumo, extensión |
+| `services/authorization.rs` | Crea reserva inicial al autorizar |
+| `services/realtime_biller.rs` | Extiende reservas durante llamadas |
+| `services/cdr_generator.rs` | Dispara consumo de reserva al generar CDR |
+
+---
+
 # CORRECCIONES Y MEJORAS RECIENTES (Enero 2026)
 
 ## Panel de Llamadas Activas - Tiempo Real

@@ -75,14 +75,14 @@ impl ActiveCallRequest {
 /// Active call response
 #[derive(Debug, Clone, Serialize)]
 pub struct ActiveCallResponse {
-    /// Call unique identifier
-    pub call_id: String,
+    /// Call unique identifier (frontend expects call_uuid)
+    pub call_uuid: String,
 
-    /// Caller number
-    pub calling_number: String,
+    /// Caller number (frontend expects caller_number)
+    pub caller_number: String,
 
-    /// Called number
-    pub called_number: String,
+    /// Called number (frontend expects callee_number)
+    pub callee_number: String,
 
     /// Call direction
     pub direction: String,
@@ -90,8 +90,11 @@ pub struct ActiveCallResponse {
     /// Start time
     pub start_time: DateTime<Utc>,
 
+    /// Call status
+    pub status: String,
+
     /// Current duration in seconds
-    pub current_duration: i32,
+    pub duration_seconds: i32,
 
     /// Current cost
     pub current_cost: Decimal,
@@ -101,6 +104,9 @@ pub struct ActiveCallResponse {
 
     /// Rate per minute
     pub rate_per_minute: Option<Decimal>,
+
+    /// Account ID
+    pub account_id: Option<i32>,
 
     /// Max allowed duration
     pub max_duration: Option<i32>,
@@ -118,16 +124,23 @@ pub struct ActiveCallResponse {
 impl From<ActiveCall> for ActiveCallResponse {
     fn from(call: ActiveCall) -> Self {
         let remaining = call.remaining_duration();
+        let status = if call.answer_time.is_some() {
+            "answered".to_string()
+        } else {
+            "dialing".to_string()
+        };
         Self {
-            call_id: call.call_uuid,
-            calling_number: call.caller_number,
-            called_number: call.called_number,
+            call_uuid: call.call_uuid,
+            caller_number: call.caller_number,
+            callee_number: call.called_number,
             direction: "outbound".to_string(), // Default, could be determined
             start_time: call.start_time,
-            current_duration: call.current_duration,
+            status,
+            duration_seconds: call.current_duration,
             current_cost: call.current_cost,
             zone_name: call.zone_name,
             rate_per_minute: call.rate_per_minute,
+            account_id: call.account_id,
             max_duration: call.max_duration,
             remaining_duration: remaining,
             server_id: call.freeswitch_server_id,
@@ -138,16 +151,23 @@ impl From<ActiveCall> for ActiveCallResponse {
 
 impl From<&ActiveCall> for ActiveCallResponse {
     fn from(call: &ActiveCall) -> Self {
+        let status = if call.answer_time.is_some() {
+            "answered".to_string()
+        } else {
+            "dialing".to_string()
+        };
         Self {
-            call_id: call.call_uuid.clone(),
-            calling_number: call.caller_number.clone(),
-            called_number: call.called_number.clone(),
+            call_uuid: call.call_uuid.clone(),
+            caller_number: call.caller_number.clone(),
+            callee_number: call.called_number.clone(),
             direction: "outbound".to_string(),
             start_time: call.start_time,
-            current_duration: call.current_duration,
+            status,
+            duration_seconds: call.current_duration,
             current_cost: call.current_cost,
             zone_name: call.zone_name.clone(),
             rate_per_minute: call.rate_per_minute,
+            account_id: call.account_id,
             max_duration: call.max_duration,
             remaining_duration: call.remaining_duration(),
             server_id: call.freeswitch_server_id.clone(),

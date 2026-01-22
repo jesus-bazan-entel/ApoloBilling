@@ -12,7 +12,7 @@ use apolo_core::models::{ActiveCall, Cdr, RateCard};
 use apolo_core::traits::{RateRepository, Repository};
 use apolo_core::AppError;
 use apolo_db::PgRateRepository;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use sqlx::{PgPool, Row};
 use tracing::{debug, info, instrument, warn};
@@ -33,7 +33,8 @@ pub async fn list_active_calls(
         SELECT
             id, call_id as call_uuid, calling_number, called_number,
             direction, start_time, current_duration, current_cost,
-            connection_id as server_id, last_updated as updated_at, server
+            connection_id as server_id, last_updated as updated_at, server,
+            client_id, answer_time, status
         FROM active_calls
         ORDER BY start_time DESC
         "#,
@@ -44,30 +45,43 @@ pub async fn list_active_calls(
 
     let calls: Vec<ActiveCallResponse> = rows
         .iter()
-        .map(|row| ActiveCallResponse {
-            call_id: row.get("call_uuid"),
-            calling_number: row
-                .get::<Option<String>, _>("calling_number")
-                .unwrap_or_default(),
-            called_number: row
-                .get::<Option<String>, _>("called_number")
-                .unwrap_or_default(),
-            direction: row
-                .get::<Option<String>, _>("direction")
-                .unwrap_or_else(|| "outbound".to_string()),
-            start_time: row.get("start_time"),
-            current_duration: row.get::<Option<i32>, _>("current_duration").unwrap_or(0),
-            current_cost: row
-                .get::<Option<Decimal>, _>("current_cost")
-                .unwrap_or(Decimal::ZERO),
-            zone_name: None,
-            rate_per_minute: None,
-            max_duration: None,
-            remaining_duration: None,
-            server_id: row
-                .get::<Option<String>, _>("server_id")
-                .or_else(|| row.get("server")),
-            updated_at: row.get("updated_at"),
+        .map(|row| {
+            // Determine status: if answer_time is set, call is answered; otherwise use stored status or default to ringing
+            let answer_time: Option<DateTime<Utc>> = row.get("answer_time");
+            let stored_status: Option<String> = row.get("status");
+            let status = if answer_time.is_some() {
+                "answered".to_string()
+            } else {
+                stored_status.unwrap_or_else(|| "ringing".to_string())
+            };
+
+            ActiveCallResponse {
+                call_uuid: row.get("call_uuid"),
+                caller_number: row
+                    .get::<Option<String>, _>("calling_number")
+                    .unwrap_or_default(),
+                callee_number: row
+                    .get::<Option<String>, _>("called_number")
+                    .unwrap_or_default(),
+                direction: row
+                    .get::<Option<String>, _>("direction")
+                    .unwrap_or_else(|| "outbound".to_string()),
+                start_time: row.get("start_time"),
+                status,
+                duration_seconds: row.get::<Option<i32>, _>("current_duration").unwrap_or(0),
+                current_cost: row
+                    .get::<Option<Decimal>, _>("current_cost")
+                    .unwrap_or(Decimal::ZERO),
+                zone_name: None,
+                rate_per_minute: None,
+                account_id: row.get::<Option<i32>, _>("client_id"),
+                max_duration: None,
+                remaining_duration: None,
+                server_id: row
+                    .get::<Option<String>, _>("server_id")
+                    .or_else(|| row.get("server")),
+                updated_at: row.get("updated_at"),
+            }
         })
         .collect();
 
@@ -148,15 +162,17 @@ pub async fn report_active_call(
     info!(call_id = %req.call_id, id = id, "Active call reported");
 
     let response = ActiveCallResponse {
-        call_id: req.call_id.clone(),
-        calling_number: req.calling_number.clone().unwrap_or_default(),
-        called_number: req.called_number.clone().unwrap_or_default(),
+        call_uuid: req.call_id.clone(),
+        caller_number: req.calling_number.clone().unwrap_or_default(),
+        callee_number: req.called_number.clone().unwrap_or_default(),
         direction: req.direction.clone(),
         start_time,
-        current_duration: req.duration,
+        status: "dialing".to_string(),
+        duration_seconds: req.duration,
         current_cost: cost,
         zone_name: rate.as_ref().map(|r| r.destination_name.clone()),
         rate_per_minute: rate.as_ref().map(|r| r.rate_per_minute),
+        account_id: None,
         max_duration: None,
         remaining_duration: None,
         server_id: req.server.clone().or(req.connection_id.clone()),

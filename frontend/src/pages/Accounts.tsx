@@ -122,7 +122,7 @@ export default function AccountsPage() {
               balance > 0 ? 'text-green-600' : 'text-red-600'
             }`}
           >
-            ${balance.toFixed(2)}
+            S/{balance.toFixed(2)}
           </span>
         )
       },
@@ -136,7 +136,7 @@ export default function AccountsPage() {
         const creditLimit = Number(acc.credit_limit) || 0
         return (
           <span className="font-mono text-slate-700">
-            {!isPrepaid ? `$${creditLimit.toFixed(2)}` : '-'}
+            {!isPrepaid ? `S/${creditLimit.toFixed(2)}` : '-'}
           </span>
         )
       },
@@ -263,7 +263,7 @@ export default function AccountsPage() {
             <div>
               <p className="text-sm text-slate-500">Saldo Total</p>
               <p className="text-2xl font-bold text-green-600">
-                ${totalBalance.toFixed(2)}
+                S/{totalBalance.toFixed(2)}
               </p>
             </div>
             <DollarSign className="w-8 h-8 text-green-500" />
@@ -478,7 +478,7 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
                   Saldo Actual
                 </label>
                 <div className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-slate-50 text-slate-700 font-mono">
-                  ${Number(account?.balance || 0).toFixed(2)}
+                  S/{Number(account?.balance || 0).toFixed(2)}
                 </div>
                 <p className="text-xs text-slate-500 mt-1">
                   Para modificar el saldo, usa la opción "Recargar" en Gestión de Saldos

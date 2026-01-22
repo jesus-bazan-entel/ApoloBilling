@@ -83,4 +83,22 @@ impl RedisClient {
         conn.expire(key, seconds as i64).await
             .map_err(|e| BillingError::Cache(e.to_string()))
     }
+
+    /// SET if Not eXists with TTL - returns true if key was set, false if it already existed
+    pub async fn setnx_ex(&self, key: &str, value: &str, ttl: usize) -> Result<bool, BillingError> {
+        let mut conn = self.get_connection().await?;
+        debug!("Redis SETNX: {} (TTL: {}s)", key, ttl);
+        // SET key value EX ttl NX - returns OK if set, nil if key exists
+        let result: Option<String> = redis::cmd("SET")
+            .arg(key)
+            .arg(value)
+            .arg("EX")
+            .arg(ttl)
+            .arg("NX")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| BillingError::Cache(e.to_string()))?;
+
+        Ok(result.is_some())
+    }
 }

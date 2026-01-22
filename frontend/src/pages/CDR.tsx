@@ -104,7 +104,7 @@ export default function CDRPage() {
         const cost = parseFloat(String(cdr.total_cost ?? cdr.cost ?? 0)) || 0
         return (
           <span className="font-mono font-medium text-slate-900">
-            ${cost.toFixed(4)}
+            S/{cost.toFixed(4)}
           </span>
         )
       },
@@ -287,7 +287,7 @@ export default function CDRPage() {
                     min_cost: e.target.value ? parseFloat(e.target.value) : undefined,
                   })
                 }
-                placeholder="$0.00"
+                placeholder="S/0.00"
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
@@ -305,7 +305,7 @@ export default function CDRPage() {
                     max_cost: e.target.value ? parseFloat(e.target.value) : undefined,
                   })
                 }
-                placeholder="$100.00"
+                placeholder="S/100.00"
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
@@ -323,7 +323,7 @@ export default function CDRPage() {
             </span>
           </div>
           <div className="text-sm text-slate-500">
-            Total facturado: $
+            Total facturado: S/
             {(data.data ?? data.items ?? []).reduce((sum, cdr) => sum + (parseFloat(String(cdr.total_cost ?? cdr.cost ?? 0)) || 0), 0).toFixed(2)}
           </div>
         </div>

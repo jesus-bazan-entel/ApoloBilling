@@ -16,10 +16,11 @@ use config::Config;
 use database::create_pool;
 use cache::RedisClient;
 use services::{
-    AuthorizationService, 
-    ReservationManager, 
-    RealtimeBiller, 
-    CdrGenerator
+    AuthorizationService,
+    ReservationManager,
+    RealtimeBiller,
+    CdrGenerator,
+    CallSimulator,
 };
 use esl::{FreeSwitchCluster, EslServer};
 
@@ -78,6 +79,17 @@ async fn main() -> std::io::Result<()> {
         reservation_mgr.clone()
     ));
 
+    // Create call simulator
+    let call_simulator = Arc::new(CallSimulator::new(
+        db_pool.clone(),
+        redis_client.clone(),
+        auth_service.clone(),
+        cdr_generator.clone(),
+        reservation_mgr.clone(),
+    ));
+
+    info!("✅ Call Simulator service created");
+
     // Start FreeSWITCH ESL cluster (client mode - connect to real FreeSWITCH)
     if !config.freeswitch_servers.is_empty() {
         let esl_cluster = FreeSwitchCluster::new(
@@ -128,6 +140,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(auth_service.clone()))
             .app_data(web::Data::new(reservation_mgr.clone()))
             .app_data(web::Data::new(cdr_generator.clone()))
+            .app_data(web::Data::new(call_simulator.clone()))
             .configure(api::routes::configure)
     })
     .workers(8)  // 8 workers for maximum concurrency

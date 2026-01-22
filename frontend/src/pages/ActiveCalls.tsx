@@ -22,12 +22,15 @@ export default function ActiveCalls() {
   const { data: apiCalls = [], isLoading } = useQuery({
     queryKey: ['activeCalls'],
     queryFn: fetchActiveCalls,
-    refetchInterval: isConnected ? false : 3000,
+    // Always refetch every 3 seconds to catch call removals
+    // WebSocket may not notify when calls end
+    refetchInterval: 3000,
   })
 
-  // Usar datos de WebSocket si está conectado, sino usar API
+  // Siempre usar datos de la API (se refresca cada 3 segundos)
+  // El WebSocket se usa solo para indicador de conexión
   // Agregar campo id para compatibilidad con DataTable
-  const calls = (isConnected && wsCalls.length > 0 ? wsCalls : apiCalls).map(call => ({
+  const calls = apiCalls.map(call => ({
     ...call,
     id: call.call_uuid
   }))
@@ -151,7 +154,7 @@ export default function ActiveCalls() {
         const cost = (durationSec / 60) * rate
         return (
           <span className="font-mono tabular-nums text-slate-700">
-            {rate > 0 ? `$${cost.toFixed(4)}` : '-'}
+            {rate > 0 ? `S/${cost.toFixed(4)}` : '-'}
           </span>
         )
       },
@@ -213,7 +216,7 @@ export default function ActiveCalls() {
         <div className="bg-white rounded-lg shadow-sm p-4 border border-slate-200">
           <p className="text-sm text-slate-500">Costo Total Est.</p>
           <p className="text-2xl font-bold tabular-nums text-purple-600">
-            $
+            S/
             {calls
               .reduce((sum, c) => {
                 const startTime = new Date(c.start_time).getTime()

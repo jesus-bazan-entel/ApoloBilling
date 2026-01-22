@@ -110,7 +110,7 @@ export default function RatesPage() {
       header: 'Tarifa/Min',
       render: (rate: RateCard) => (
         <span className="font-mono text-green-600 font-bold">
-          ${Number(rate.rate_per_minute).toFixed(4)}
+          S/{Number(rate.rate_per_minute).toFixed(4)}
         </span>
       ),
       className: 'text-right',
@@ -128,7 +128,7 @@ export default function RatesPage() {
       header: 'Cargo Conexión',
       render: (rate: RateCard) => (
         <span className="font-mono text-slate-700">
-          ${Number(rate.connection_fee).toFixed(4)}
+          S/{Number(rate.connection_fee).toFixed(4)}
         </span>
       ),
       className: 'text-right',
@@ -226,7 +226,7 @@ export default function RatesPage() {
             <div>
               <p className="text-sm text-slate-500">Tarifa Promedio/Min</p>
               <p className="text-2xl font-bold text-green-600">
-                $
+                S/
                 {rates.length > 0
                   ? (
                       rates.reduce((sum, r) => sum + Number(r.rate_per_minute), 0) /
@@ -427,7 +427,7 @@ function RateModal({ rate, zones, onClose, onSubmit, isLoading, error }: RateMod
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Tarifa por Minuto ($) *
+                Tarifa por Minuto (S/) *
               </label>
               <input
                 type="number"
@@ -469,7 +469,7 @@ function RateModal({ rate, zones, onClose, onSubmit, isLoading, error }: RateMod
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Cargo de Conexión ($)
+                Cargo de Conexión (S/)
               </label>
               <input
                 type="number"
@@ -698,7 +698,7 @@ function LookupModal({ onClose }: LookupModalProps) {
                     <div>
                       <span className="text-slate-600">Tarifa/Min:</span>
                       <span className="font-mono font-bold text-green-600 ml-2">
-                        ${Number(result.rate_per_minute).toFixed(4)}
+                        S/{Number(result.rate_per_minute).toFixed(4)}
                       </span>
                     </div>
                     <div>
@@ -710,7 +710,7 @@ function LookupModal({ onClose }: LookupModalProps) {
                     <div>
                       <span className="text-slate-600">Cargo Conexión:</span>
                       <span className="font-mono ml-2">
-                        ${Number(result.connection_fee).toFixed(4)}
+                        S/{Number(result.connection_fee).toFixed(4)}
                       </span>
                     </div>
                   </div>

@@ -40,6 +40,56 @@ impl AuthorizationService {
             call_uuid, req.caller, req.callee, direction
         );
 
+        // 🔒 Try to acquire authorization lock to prevent duplicate reservations
+        let lock_key = format!("auth_lock:{}", call_uuid);
+        let lock_acquired = self.redis.setnx_ex(&lock_key, "1", 30).await.unwrap_or(false);
+
+        if !lock_acquired {
+            // Another process is authorizing this call, wait for reservation to appear
+            info!("⏳ Authorization lock exists for {}, waiting for existing reservation...", call_uuid);
+
+            // Wait up to 500ms for the reservation to appear
+            for _ in 0..5 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                let client = self.db_pool.get().await
+                    .map_err(|e| BillingError::Internal(e.to_string()))?;
+
+                let existing = client.query_opt(
+                    "SELECT id, reserved_amount, rate_per_minute, account_id
+                     FROM balance_reservations WHERE call_uuid = $1 AND status = 'active' LIMIT 1",
+                    &[&call_uuid]
+                ).await.map_err(|e| BillingError::Database(e))?;
+
+                if let Some(row) = existing {
+                    let reservation_id: Uuid = row.get(0);
+                    let reserved_amount: Decimal = row.get(1);
+                    let rate_per_minute: Decimal = row.get(2);
+                    let account_id: i32 = row.get(3);
+
+                    info!(
+                        "✅ Found existing reservation {} for call {} (waited for lock)",
+                        reservation_id, call_uuid
+                    );
+
+                    return Ok(AuthResponse {
+                        authorized: true,
+                        reason: "authorized_existing".to_string(),
+                        uuid: call_uuid,
+                        account_id: Some(account_id.into()),
+                        account_number: None,
+                        reservation_id: Some(reservation_id),
+                        reserved_amount: Some(reserved_amount.to_f64().unwrap_or(0.0)),
+                        max_duration_seconds: Some(324),
+                        rate_per_minute: Some(rate_per_minute.to_f64().unwrap_or(0.0)),
+                    });
+                }
+            }
+
+            // If still no reservation after waiting, it might be denied
+            warn!("⚠️ Lock exists but no reservation found for {} after waiting", call_uuid);
+        }
+
         // 1. Find account by ANI (caller)
         let account = match self.find_account_by_ani(&req.caller).await? {
             Some(acc) => acc,
@@ -119,7 +169,37 @@ impl AuthorizationService {
             rate.destination_name, rate.rate_per_minute
         );
 
-        // 4. Create reservation
+        // 4. Check if reservation already exists for this call (prevent duplicates)
+        let client = self.db_pool.get().await
+            .map_err(|e| BillingError::Internal(e.to_string()))?;
+
+        let existing = client.query_opt(
+            "SELECT id, reserved_amount FROM balance_reservations WHERE call_uuid = $1 AND status = 'active' LIMIT 1",
+            &[&call_uuid]
+        ).await.map_err(|e| BillingError::Database(e))?;
+
+        if let Some(row) = existing {
+            let reservation_id: Uuid = row.get(0);
+            let reserved_amount: Decimal = row.get(1);
+            info!(
+                "⏭️  Reservation already exists for call {}: {} (${:.2})",
+                call_uuid, reservation_id, reserved_amount
+            );
+
+            return Ok(AuthResponse {
+                authorized: true,
+                reason: "authorized_existing".to_string(),
+                uuid: call_uuid,
+                account_id: Some(account.id.into()),
+                account_number: Some(account.account_number.clone()),
+                reservation_id: Some(reservation_id),
+                reserved_amount: Some(reserved_amount.to_f64().unwrap_or(0.0)),
+                max_duration_seconds: Some(300), // Default 5 minutes
+                rate_per_minute: Some(rate.rate_per_minute.to_f64().unwrap_or(0.0)),
+            });
+        }
+
+        // 5. Create new reservation
         let reservation_result = self.reservation_mgr
             .create_reservation(
                 account.id.into(),
@@ -144,7 +224,7 @@ impl AuthorizationService {
             });
         }
 
-        // 5. AUTHORIZED ✅
+        // 6. AUTHORIZED ✅
         info!(
             "✅ Call AUTHORIZED: {} for account {}",
             call_uuid, account.account_number

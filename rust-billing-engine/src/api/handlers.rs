@@ -1,6 +1,6 @@
 // src/api/handlers.rs
 use actix_web::{web, HttpResponse};
-use crate::services::{AuthorizationService, ReservationManager};
+use crate::services::{AuthorizationService, ReservationManager, CallSimulator, SimulateCallRequest, SimulationScenario};
 use crate::models::{AuthRequest, ConsumeReservationRequest, HealthResponse};
 use std::sync::Arc;
 
@@ -99,4 +99,120 @@ pub async fn consume_reservation(
             }))
         }
     }
+}
+
+// ==================== SIMULATION ENDPOINTS ====================
+
+/// Start a simulated call
+/// POST /api/v1/simulate/call
+pub async fn simulate_call(
+    req: web::Json<SimulateCallRequest>,
+    simulator: web::Data<Arc<CallSimulator>>,
+) -> HttpResponse {
+    tracing::info!("📞 Simulation request: {} -> {}", req.caller, req.callee);
+
+    match simulator.start_call(req.into_inner()).await {
+        Ok(response) => HttpResponse::Ok().json(response),
+        Err(e) => {
+            tracing::error!("Simulation error: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "simulation_failed",
+                "message": e
+            }))
+        }
+    }
+}
+
+/// Hangup a simulated call
+/// POST /api/v1/simulate/hangup/{call_uuid}
+pub async fn simulate_hangup(
+    path: web::Path<String>,
+    query: web::Query<HangupQuery>,
+    simulator: web::Data<Arc<CallSimulator>>,
+) -> HttpResponse {
+    let call_uuid = path.into_inner();
+    tracing::info!("📞 Hangup request for call: {}", call_uuid);
+
+    match simulator.hangup_call(&call_uuid, query.cause.clone()).await {
+        Ok(()) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "message": format!("Call {} hung up", call_uuid)
+        })),
+        Err(e) => {
+            tracing::error!("Hangup error: {}", e);
+            HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "hangup_failed",
+                "message": e
+            }))
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct HangupQuery {
+    #[serde(default)]
+    pub cause: Option<String>,
+}
+
+/// List active simulated calls
+/// GET /api/v1/simulate/calls
+pub async fn list_simulated_calls(
+    simulator: web::Data<Arc<CallSimulator>>,
+) -> HttpResponse {
+    let calls = simulator.list_active_calls().await;
+    HttpResponse::Ok().json(serde_json::json!({
+        "count": calls.len(),
+        "calls": calls
+    }))
+}
+
+/// Get a specific simulated call
+/// GET /api/v1/simulate/call/{call_uuid}
+pub async fn get_simulated_call(
+    path: web::Path<String>,
+    simulator: web::Data<Arc<CallSimulator>>,
+) -> HttpResponse {
+    let call_uuid = path.into_inner();
+
+    match simulator.get_call(&call_uuid).await {
+        Some(call) => HttpResponse::Ok().json(call),
+        None => HttpResponse::NotFound().json(serde_json::json!({
+            "error": "not_found",
+            "message": format!("Call {} not found", call_uuid)
+        }))
+    }
+}
+
+/// Run a simulation scenario
+/// POST /api/v1/simulate/scenario
+pub async fn run_scenario(
+    req: web::Json<SimulationScenario>,
+    simulator: web::Data<Arc<CallSimulator>>,
+) -> HttpResponse {
+    tracing::info!("🎬 Running scenario: {}", req.name);
+
+    let results = simulator.run_scenario(req.into_inner()).await;
+
+    let successful = results.iter().filter(|r| r.success).count();
+    let failed = results.len() - successful;
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "scenario_completed": true,
+        "total_calls": results.len(),
+        "successful": successful,
+        "failed": failed,
+        "results": results
+    }))
+}
+
+/// Cleanup completed simulations from memory
+/// POST /api/v1/simulate/cleanup
+pub async fn cleanup_simulations(
+    simulator: web::Data<Arc<CallSimulator>>,
+) -> HttpResponse {
+    simulator.cleanup_completed().await;
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "message": "Completed simulations cleaned up"
+    }))
 }
