@@ -90,11 +90,24 @@ impl AuthorizationService {
             warn!("⚠️ Lock exists but no reservation found for {} after waiting", call_uuid);
         }
 
-        // 1. Find account by ANI (caller)
-        let account = match self.find_account_by_ani(&req.caller).await? {
+        // 🔍 Check if callee is a toll-free number (0800, 0801, 1800)
+        // For toll-free, the account is looked up by CALLEE (the 0800 owner pays)
+        let is_toll_free = req.callee.starts_with("0800")
+            || req.callee.starts_with("0801")
+            || req.callee.starts_with("1800");
+
+        // 1. Find account by ANI (caller) or by DNIS (callee) for toll-free
+        let (account, lookup_number) = if is_toll_free {
+            info!("📞 Toll-free call detected: {} → {} - looking up account by callee", req.caller, req.callee);
+            (self.find_account_by_ani(&req.callee).await?, req.callee.clone())
+        } else {
+            (self.find_account_by_ani(&req.caller).await?, req.caller.clone())
+        };
+
+        let account = match account {
             Some(acc) => acc,
             None => {
-                warn!("❌ Account not found for caller: {}", req.caller);
+                warn!("❌ Account not found for {}: {}", if is_toll_free { "callee (toll-free)" } else { "caller" }, lookup_number);
                 return Ok(AuthResponse {
                     authorized: false,
                     reason: "account_not_found".to_string(),
@@ -125,8 +138,8 @@ impl AuthorizationService {
             });
         }
 
-        // 📞 INBOUND CALLS: Solo registrar, NO tarificar
-        if direction == "inbound" {
+        // 📞 INBOUND CALLS: Solo registrar, NO tarificar (EXCEPTO toll-free que SÍ se tarifica)
+        if direction == "inbound" && !is_toll_free {
             info!(
                 "✅ INBOUND Call AUTHORIZED (no billing): {} for account {}",
                 call_uuid, account.account_number
@@ -143,6 +156,14 @@ impl AuthorizationService {
                 max_duration_seconds: None,
                 rate_per_minute: None,
             });
+        }
+
+        // 📞 TOLL-FREE INBOUND: Se tarifica al dueño del número
+        if is_toll_free {
+            info!(
+                "📞 TOLL-FREE Call: {} → {} - billing to account {} (owner of {})",
+                req.caller, req.callee, account.account_number, req.callee
+            );
         }
 
         // 3. Get rate for destination

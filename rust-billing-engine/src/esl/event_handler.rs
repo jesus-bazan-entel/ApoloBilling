@@ -111,6 +111,35 @@ impl EventHandler {
 
         info!("📞 CHANNEL_CREATE (a-leg): {} - {} → {} [{}]", uuid, caller, callee, direction);
 
+        // 🔍 Check if destination is a toll-free number (0800, 0801, 1800)
+        // These numbers ARE billed to the account that owns them
+        let is_toll_free = callee.starts_with("0800")
+            || callee.starts_with("0801")
+            || callee.starts_with("1800");
+
+        if is_toll_free {
+            info!("📞 Toll-free number detected: {} - will authorize for billing", callee);
+        }
+
+        // 🔍 Skip authorization for INBOUND calls (from external carriers via Kamailio)
+        // EXCEPT for toll-free numbers which are billed to the receiving account
+        // Inbound calls don't need billing authorization - the caller is external
+        if (direction == "inbound" || context == "to-kamailio") && !is_toll_free {
+            info!("⏭️  Skipping authorization for INBOUND call {} (context: {}, not toll-free)", uuid, context);
+
+            // Insert into active_calls for tracking
+            if let Ok(client) = self.db_pool.get().await {
+                let now = Utc::now();
+                let _ = client.execute(
+                    "INSERT INTO active_calls (call_id, calling_number, called_number, direction, start_time, current_duration, current_cost, server)
+                     VALUES ($1, $2, $3, $4, $5, 0, 0, $6)
+                     ON CONFLICT (call_id) DO NOTHING",
+                    &[&uuid, &caller, &callee, &"inbound".to_string(), &now, &self.server_id]
+                ).await;
+            }
+            return;
+        }
+
         // 🔍 Check if call was already authorized via HTTP endpoint (dialplan curl)
         // This prevents duplicate reservations
         let already_authorized = if let Ok(client) = self.db_pool.get().await {

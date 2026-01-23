@@ -1104,8 +1104,196 @@ También corregido para parsear strings:
 | `rust-billing-engine/src/services/cdr_generator.rs` | Nombres columnas CDR |
 | `rust-billing-engine/src/services/authorization.rs` | DateTime<Utc> timestamps |
 | `rust-billing-engine/src/services/reservation_manager.rs` | DateTime<Utc> expires_at |
-| `rust-billing-engine/src/esl/event_handler.rs` | INSERT/DELETE active_calls |
+| `rust-billing-engine/src/esl/event_handler.rs` | INSERT/DELETE active_calls, skip auth inbound, detect toll-free |
+| `rust-billing-engine/src/services/authorization.rs` | Lookup by callee para toll-free |
 | `/etc/freeswitch/dialplan/from-pbx.xml` | break="never", &amp; entities |
+| `/etc/freeswitch/dialplan/from-kamailio.xml` | Dialplan para llamadas inbound |
+| `/etc/freeswitch/sip_profiles/external.xml` | Session timers, 100rel |
+| `/etc/freeswitch/sip_profiles/internal.xml` | Session timers, 100rel |
+
+---
+
+## Llamadas Entrantes (Inbound) - Configuración Completa
+
+### Problema Original
+Las llamadas entrantes desde Kamailio hacia la PBX interna eran rechazadas con `CALL_REJECTED` porque el billing engine intentaba autorizarlas como llamadas salientes, buscando una cuenta para el caller externo.
+
+### Solución Implementada
+
+#### 1. FreeSWITCH - Perfiles SIP con Session Timers
+
+**Archivos:**
+- `/etc/freeswitch/sip_profiles/external.xml` (puerto 5062, recibe de Kamailio)
+- `/etc/freeswitch/sip_profiles/internal.xml` (puerto 5080, envía a PBX)
+
+```xml
+<!-- Parámetros críticos agregados a ambos perfiles -->
+<param name="enable-100rel" value="true"/>
+<param name="enable-timer" value="true"/>
+<param name="session-timeout" value="1800"/>
+<param name="minimum-session-expires" value="120"/>
+```
+
+#### 2. FreeSWITCH - Dialplan para Llamadas Entrantes
+
+**Archivo:** `/etc/freeswitch/dialplan/from-kamailio.xml`
+
+```xml
+<context name="to-kamailio">
+  <extension name="inbound-from-kamailio">
+    <condition field="${network_addr}" expression="^172\.18\.1\.14$">
+      <condition field="destination_number" expression="^(.+)$">
+        <action application="log" data="INFO Inbound from Kamailio: ${caller_id_number} -> ${destination_number}"/>
+        <action application="set" data="call_timeout=120"/>
+        <action application="set" data="ignore_early_media=true"/>
+        <action application="set" data="inherit_codec=true"/>
+        <action application="bridge" data="sofia/internal/${destination_number}@190.105.250.73:5060"/>
+      </condition>
+    </condition>
+  </extension>
+</context>
+```
+
+#### 3. Billing Engine - Skip Authorization para Inbound
+
+**Archivo:** `rust-billing-engine/src/esl/event_handler.rs`
+
+Las llamadas inbound (contexto `to-kamailio`) ahora se excluyen de autorización, EXCEPTO números toll-free:
+
+```rust
+// Detectar números toll-free (0800, 0801, 1800)
+let is_toll_free = callee.starts_with("0800")
+    || callee.starts_with("0801")
+    || callee.starts_with("1800");
+
+// Skip authorization SOLO si es inbound Y NO es toll-free
+if (direction == "inbound" || context == "to-kamailio") && !is_toll_free {
+    info!("⏭️  Skipping authorization for INBOUND call {} (context: {}, not toll-free)", uuid, context);
+    // Registrar en active_calls para monitoreo
+    // NO crear reservación ni cobrar
+    return;
+}
+```
+
+#### 4. Billing Engine - Autorización para Toll-Free (0800)
+
+**Archivo:** `rust-billing-engine/src/services/authorization.rs`
+
+Para números toll-free, la cuenta se busca por el **CALLEE** (número 0800), no por el caller:
+
+```rust
+// Para toll-free, buscar cuenta por CALLEE (el dueño del 0800 paga)
+let is_toll_free = req.callee.starts_with("0800")
+    || req.callee.starts_with("0801")
+    || req.callee.starts_with("1800");
+
+let (account, lookup_number) = if is_toll_free {
+    info!("📞 Toll-free call detected: {} → {} - looking up account by callee", req.caller, req.callee);
+    (self.find_account_by_ani(&req.callee).await?, req.callee.clone())
+} else {
+    (self.find_account_by_ani(&req.caller).await?, req.caller.clone())
+};
+```
+
+### Flujos de Llamadas
+
+#### Llamada Inbound Normal (NO toll-free)
+```
+Caller externo (938375250) → Número local (612215101149)
+
+1. Kamailio recibe llamada externa
+2. Kamailio envía a FreeSWITCH (:5062, perfil external)
+3. FreeSWITCH detecta contexto "to-kamailio"
+4. Billing Engine: Skip authorization (inbound, no toll-free)
+5. FreeSWITCH bridge a PBX interna (190.105.250.73:5060)
+6. CDR generado SIN cobro
+```
+
+#### Llamada Inbound Toll-Free (0800)
+```
+Caller externo (938375250) → Número toll-free (0800123456)
+
+1. Kamailio recibe llamada externa
+2. Kamailio envía a FreeSWITCH (:5062, perfil external)
+3. FreeSWITCH detecta contexto "to-kamailio"
+4. Billing Engine: Detecta toll-free, busca cuenta por "0800123456"
+5. Billing Engine: Autoriza y reserva saldo de cuenta 0800123456
+6. FreeSWITCH bridge a PBX interna
+7. CDR generado CON cobro a la cuenta del 0800
+```
+
+#### Llamada Outbound (desde PBX)
+```
+Usuario PBX (15100000) → Destino externo (2261938375250)
+
+1. PBX envía llamada a FreeSWITCH (:5080, perfil internal)
+2. FreeSWITCH detecta contexto "from-pbx"
+3. Billing Engine: Autoriza, busca cuenta por "15100000" (caller)
+4. Billing Engine: Reserva saldo
+5. FreeSWITCH bridge a Kamailio
+6. CDR generado CON cobro al caller
+```
+
+### Configuración Web para Toll-Free
+
+Para habilitar cobro en líneas 0800, se requiere:
+
+**1. Crear Cuenta para el número 0800:**
+```
+Cuentas → Nueva Cuenta
+- account_number: 0800123456
+- account_name: "Línea Gratuita - Empresa XYZ"
+- account_type: PREPAID o POSTPAID
+- balance: 1000.00
+```
+
+**2. Crear Tarifa para prefijo 0800:**
+```
+Tarifas → Nueva Tarifa
+- destination_prefix: 0800 (aplica a todos los 0800)
+- destination_name: "Líneas Toll-Free"
+- rate_per_minute: 0.05
+- billing_increment: 6
+```
+
+### Resumen de Comportamiento
+
+| Tipo | Contexto | Cuenta buscada por | Cobro |
+|------|----------|-------------------|-------|
+| Outbound | from-pbx | CALLER | ✅ Sí |
+| Inbound normal | to-kamailio | - | ❌ No |
+| Inbound toll-free | to-kamailio | CALLEE (0800) | ✅ Sí |
+
+### Archivos Modificados
+
+| Archivo | Cambio |
+|---------|--------|
+| `/etc/freeswitch/sip_profiles/external.xml` | Session timers, 100rel |
+| `/etc/freeswitch/sip_profiles/internal.xml` | Session timers, 100rel |
+| `/etc/freeswitch/dialplan/from-kamailio.xml` | Dialplan inbound |
+| `/etc/freeswitch/autoload_configs/acl.conf.xml` | ACL para PBX |
+| `rust-billing-engine/src/esl/event_handler.rs` | Skip auth inbound, detect toll-free |
+| `rust-billing-engine/src/services/authorization.rs` | Lookup by callee para toll-free |
+
+### Comandos Útiles
+
+```bash
+# Recargar configuración FreeSWITCH
+fs_cli -x "reloadxml"
+
+# Reiniciar perfiles Sofia (después de cambiar .xml)
+fs_cli -x "sofia profile external restart"
+fs_cli -x "sofia profile internal restart"
+
+# Ver estado de perfiles
+fs_cli -x "sofia status"
+
+# Reiniciar billing engine
+sudo systemctl restart apolo-billing-engine
+
+# Ver logs del billing engine
+journalctl -u apolo-billing-engine -f
+```
 
 ---
 
