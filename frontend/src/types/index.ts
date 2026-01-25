@@ -2,6 +2,36 @@
 export type AccountType = 'prepaid' | 'postpaid' | 'PREPAID' | 'POSTPAID'
 export type AccountStatus = 'active' | 'suspended' | 'closed' | 'ACTIVE' | 'SUSPENDED' | 'CLOSED'
 
+// User types
+export type UserRole = 'superadmin' | 'admin' | 'operator'
+
+export interface User {
+  id: number
+  username: string
+  nombre?: string
+  apellido?: string
+  email?: string
+  role: UserRole
+  activo: boolean
+  ultimo_login?: string
+  created_at: string
+  updated_at: string
+}
+
+// Audit log types
+export interface AuditLog {
+  id: number
+  user_id?: number
+  username: string
+  action: string
+  entity_type: string
+  entity_id?: string
+  details?: any
+  ip_address?: string
+  user_agent?: string
+  created_at: string
+}
+
 export interface Account {
   id: number
   account_number: string

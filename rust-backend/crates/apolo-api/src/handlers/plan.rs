@@ -6,7 +6,7 @@ use crate::dto::plan::{PlanCreateRequest, PlanResponse, PlanUpdateRequest};
 use crate::dto::ApiResponse;
 use actix_web::{web, HttpResponse};
 use apolo_auth::AuthenticatedUser;
-use apolo_core::models::AccountType;
+use apolo_core::models::{AccountType, AuditLogBuilder};
 use apolo_core::AppError;
 use apolo_db::PgPlanRepository;
 use sqlx::PgPool;
@@ -132,6 +132,27 @@ pub async fn create_plan(
         "Plan created successfully"
     );
 
+    // Audit log
+    let audit_details = serde_json::json!({
+        "plan_name": created.plan_name,
+        "plan_code": created.plan_code,
+        "account_type": format!("{:?}", created.account_type),
+        "initial_balance": created.initial_balance,
+        "credit_limit": created.credit_limit,
+        "max_concurrent_calls": created.max_concurrent_calls,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(user.username.clone())
+        .action("create_plan")
+        .entity_type("plan")
+        .entity_id(created.id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     let response = PlanResponse::from(created);
     Ok(HttpResponse::Created().json(ApiResponse::with_message(
         response,
@@ -181,6 +202,24 @@ pub async fn update_plan(
 
     info!(id = plan_id, "Plan updated successfully");
 
+    // Audit log
+    let audit_details = serde_json::json!({
+        "plan_name": updated.plan_name,
+        "plan_code": updated.plan_code,
+        "enabled": updated.enabled,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("update_plan")
+        .entity_type("plan")
+        .entity_id(plan_id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     let response = PlanResponse::from(updated);
     Ok(HttpResponse::Ok().json(ApiResponse::with_message(
         response,
@@ -203,7 +242,7 @@ pub async fn delete_plan(
     let repo = PgPlanRepository::new(pool.get_ref().clone());
 
     // Check if plan exists
-    let _existing = repo
+    let existing = repo
         .find_by_id(plan_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Plan {} not found", plan_id)))?;
@@ -212,6 +251,23 @@ pub async fn delete_plan(
     repo.delete(plan_id).await?;
 
     info!(id = plan_id, "Plan deleted successfully");
+
+    // Audit log
+    let audit_details = serde_json::json!({
+        "plan_name": existing.plan_name,
+        "plan_code": existing.plan_code,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("delete_plan")
+        .entity_type("plan")
+        .entity_id(plan_id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
 
     Ok(HttpResponse::Ok().json(ApiResponse::with_message(
         (),

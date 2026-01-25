@@ -9,7 +9,7 @@ use crate::dto::account::{
 use crate::dto::{ApiResponse, PaginationParams};
 use actix_web::{web, HttpResponse};
 use apolo_auth::AuthenticatedUser;
-use apolo_core::models::{AccountStatus, AccountType};
+use apolo_core::models::{AccountStatus, AccountType, AuditLogBuilder};
 use apolo_core::traits::{AccountRepository, Repository};
 use apolo_core::AppError;
 use apolo_db::{PgAccountRepository, PgPlanRepository};
@@ -170,6 +170,26 @@ pub async fn create_account(
         "Account created successfully"
     );
 
+    // Audit log
+    let audit_details = serde_json::json!({
+        "account_number": created.account_number,
+        "account_type": format!("{:?}", created.account_type),
+        "balance": created.balance,
+        "credit_limit": created.credit_limit,
+        "plan_id": created.plan_id,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("create_account")
+        .entity_type("account")
+        .entity_id(created.id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     let response = AccountResponse::from(created);
     Ok(HttpResponse::Created().json(ApiResponse::with_message(
         response,
@@ -260,6 +280,25 @@ pub async fn update_account(
         "Account updated successfully"
     );
 
+    // Audit log
+    let audit_details = serde_json::json!({
+        "account_number": updated.account_number,
+        "status": format!("{:?}", updated.status),
+        "credit_limit": updated.credit_limit,
+        "max_concurrent_calls": updated.max_concurrent_calls,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("update_account")
+        .entity_type("account")
+        .entity_id(updated.id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     let response = AccountResponse::from(updated);
     Ok(HttpResponse::Ok().json(ApiResponse::with_message(
         response,
@@ -306,6 +345,26 @@ pub async fn topup_account(
         "Topup successful"
     );
 
+    // Audit log
+    let audit_details = serde_json::json!({
+        "account_number": account.account_number,
+        "amount": req.amount,
+        "previous_balance": previous_balance,
+        "new_balance": new_balance,
+        "reason": req.reason,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("topup_account")
+        .entity_type("account")
+        .entity_id(account_id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     let response = TopupResponse::new(previous_balance, req.amount, new_balance);
     Ok(HttpResponse::Ok().json(ApiResponse::success(response)))
 }
@@ -329,7 +388,7 @@ pub async fn delete_account(
     let repo = PgAccountRepository::new(pool.get_ref().clone());
 
     // Verify account exists
-    let _account = repo
+    let account = repo
         .find_by_id(account_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Account {} not found", account_id)))?;
@@ -343,6 +402,24 @@ pub async fn delete_account(
             admin = %admin.username,
             "Account deleted successfully"
         );
+
+        // Audit log
+        let audit_details = serde_json::json!({
+            "account_number": account.account_number,
+            "account_type": format!("{:?}", account.account_type),
+        });
+
+        if let Ok(audit_data) = AuditLogBuilder::default()
+            .username(admin.username.clone())
+            .action("delete_account")
+            .entity_type("account")
+            .entity_id(account_id.to_string())
+            .details(audit_details)
+            .build()
+        {
+            audit_data.insert(pool.get_ref()).await;
+        }
+
         Ok(HttpResponse::NoContent().finish())
     } else {
         Err(AppError::Internal("Failed to delete account".to_string()))

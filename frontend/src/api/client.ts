@@ -483,4 +483,78 @@ export const fetchTrafficByDirection = async (): Promise<TrafficByDirection> => 
   return data.data || data
 }
 
+// ============== USER MANAGEMENT (Superadmin only) ==============
+
+import type { User } from '../types'
+
+export interface UserCreateRequest {
+  username: string
+  password: string
+  nombre?: string
+  apellido?: string
+  email?: string
+  role: string
+}
+
+export interface UserUpdateRequest {
+  nombre?: string
+  apellido?: string
+  email?: string
+  role?: string
+  activo?: boolean
+}
+
+export const fetchUsers = async (page = 1, per_page = 50) => {
+  const { data } = await api.get(`/users?page=${page}&per_page=${per_page}`)
+  return data.data || data
+}
+
+export const fetchUser = async (id: number): Promise<User> => {
+  const { data } = await api.get(`/users/${id}`)
+  return data.data || data
+}
+
+export const createUser = async (userData: UserCreateRequest): Promise<User> => {
+  const { data } = await api.post('/users', userData)
+  return data.data || data
+}
+
+export const updateUser = async (id: number, userData: UserUpdateRequest): Promise<User> => {
+  const { data } = await api.put(`/users/${id}`, userData)
+  return data.data || data
+}
+
+export const deleteUser = async (id: number): Promise<void> => {
+  await api.delete(`/users/${id}`)
+}
+
+// ============== AUDIT LOGS (Superadmin only) ==============
+
+export interface AuditLogFilters {
+  username?: string
+  action?: string
+  entity_type?: string
+  entity_id?: string
+  start_date?: string
+  end_date?: string
+  page?: number
+  per_page?: number
+}
+
+export const fetchAuditLogs = async (filters: AuditLogFilters) => {
+  const params = new URLSearchParams()
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      params.append(key, String(value))
+    }
+  })
+  const { data } = await api.get(`/audit-logs?${params.toString()}`)
+  return data.data || data
+}
+
+export const fetchAuditStats = async () => {
+  const { data } = await api.get('/audit-logs/stats')
+  return data.data || data
+}
+
 export default api

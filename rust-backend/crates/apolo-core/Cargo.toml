@@ -33,6 +33,12 @@ validator = { workspace = true }
 config = { workspace = true }
 dotenvy = { workspace = true }
 
+# Database
+sqlx = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
 # System info
 num_cpus = "1.16"
 

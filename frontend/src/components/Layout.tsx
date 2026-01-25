@@ -15,9 +15,11 @@ import {
   ChevronDown,
   Zap,
   Shield,
+  UserCog,
+  FileSearch,
 } from 'lucide-react'
 
-const navigation = [
+const baseNavigation = [
   { name: 'Panel de Control', href: '/', icon: LayoutDashboard },
   { name: 'Llamadas Activas', href: '/calls', icon: Phone },
   { name: 'Registros CDR', href: '/cdr', icon: FileText },
@@ -26,6 +28,11 @@ const navigation = [
   { name: 'Saldos', href: '/balance', icon: DollarSign },
   { name: 'Zonas', href: '/zones', icon: Globe },
   { name: 'Tarifas', href: '/rates', icon: Settings },
+]
+
+const superadminNavigation = [
+  { name: 'Gestión de Usuarios', href: '/users', icon: UserCog },
+  { name: 'Auditoría de Acciones', href: '/audit-logs', icon: FileSearch },
 ]
 
 interface LayoutProps {
@@ -55,6 +62,11 @@ export default function Layout({ children }: LayoutProps) {
 
   const isOnline = health?.status === 'ok' || health?.status === 'healthy'
 
+  // Build navigation based on user role
+  const navigation = currentUser?.role === 'superadmin'
+    ? [...baseNavigation, ...superadminNavigation]
+    : baseNavigation
+
   const handleLogout = async () => {
     setIsLoggingOut(true)
     try {
@@ -78,6 +90,8 @@ export default function Layout({ children }: LayoutProps) {
   // Get role color
   const getRoleStyle = (role: string) => {
     switch (role) {
+      case 'superadmin':
+        return 'bg-red-500/20 text-red-400 border-red-500/30'
       case 'admin':
         return 'bg-amber-500/20 text-amber-400 border-amber-500/30'
       case 'operator':

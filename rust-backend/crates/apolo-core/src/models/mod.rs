@@ -3,6 +3,7 @@
 //! This module contains all the core domain models used throughout the application.
 
 pub mod account;
+pub mod audit;
 pub mod cdr;
 pub mod plan;
 pub mod rate;
@@ -11,6 +12,7 @@ pub mod user;
 pub mod zone;
 
 pub use account::{Account, AccountStatus, AccountType};
+pub use audit::{AuditLog, AuditLogBuilder, AuditLogData};
 pub use cdr::{ActiveCall, Cdr};
 pub use plan::Plan;
 pub use rate::RateCard;

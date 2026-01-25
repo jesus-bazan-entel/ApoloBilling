@@ -10,7 +10,7 @@ use crate::dto::management::{
 use crate::dto::{ApiResponse, PaginationParams};
 use actix_web::{web, HttpResponse};
 use apolo_auth::AuthenticatedUser;
-use apolo_core::models::{NetworkType, ZoneType};
+use apolo_core::models::{AuditLogBuilder, NetworkType, ZoneType};
 use apolo_core::AppError;
 use chrono::Utc;
 use rust_decimal::Decimal;
@@ -130,6 +130,24 @@ pub async fn create_zone(
     let id: i32 = result.get("id");
 
     info!(id = id, zone_name = %req.zone_name, "Zone created successfully");
+
+    // Audit log
+    let audit_details = serde_json::json!({
+        "zone_name": req.zone_name,
+        "zone_code": req.zone_code,
+        "zone_type": req.zone_type,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("create_zone")
+        .entity_type("zone")
+        .entity_id(id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
 
     // Sync to rate_cards
     let sync_result = sync_rate_cards(&pool).await;
@@ -301,6 +319,23 @@ pub async fn update_zone(
 
     info!(id = zone_id, "Zone updated successfully");
 
+    // Audit log
+    let audit_details = serde_json::json!({
+        "zone_name": req.zone_name,
+        "enabled": req.enabled,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("update_zone")
+        .entity_type("zone")
+        .entity_id(zone_id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     // Sync to rate_cards
     let sync_result = sync_rate_cards(&pool).await;
     if let Err(e) = sync_result {
@@ -342,6 +377,14 @@ pub async fn delete_zone(
     let zone_id = path.into_inner();
     debug!(id = zone_id, admin = %admin.username, "Deleting zone");
 
+    // Get zone info before deleting
+    let zone_name: String = sqlx::query_scalar("SELECT zone_name FROM zones WHERE id = $1")
+        .bind(zone_id)
+        .fetch_optional(pool.get_ref())
+        .await
+        .map_err(|e| AppError::Database(format!("Failed to get zone: {}", e)))?
+        .ok_or_else(|| AppError::NotFound(format!("Zone {} not found", zone_id)))?;
+
     // Check if zone has prefixes or tariffs
     let prefix_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM prefixes WHERE zone_id = $1")
         .bind(zone_id)
@@ -381,6 +424,22 @@ pub async fn delete_zone(
     }
 
     info!(id = zone_id, admin = %admin.username, "Zone deleted successfully");
+
+    // Audit log
+    let audit_details = serde_json::json!({
+        "zone_name": zone_name,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(admin.username.clone())
+        .action("delete_zone")
+        .entity_type("zone")
+        .entity_id(zone_id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
 
     // Sync to rate_cards
     let sync_result = sync_rate_cards(&pool).await;
@@ -523,6 +582,24 @@ pub async fn create_prefix(
 
     info!(id = id, prefix = %req.prefix, "Prefix created successfully");
 
+    // Audit log
+    let audit_details = serde_json::json!({
+        "prefix": req.prefix,
+        "zone_id": req.zone_id,
+        "network_type": req.network_type,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("create_prefix")
+        .entity_type("prefix")
+        .entity_id(id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     // Sync to rate_cards
     let sync_result = sync_rate_cards(&pool).await;
     if let Err(e) = sync_result {
@@ -560,6 +637,14 @@ pub async fn delete_prefix(
     let prefix_id = path.into_inner();
     debug!(id = prefix_id, admin = %admin.username, "Deleting prefix");
 
+    // Get prefix info before deleting
+    let prefix: String = sqlx::query_scalar("SELECT prefix FROM prefixes WHERE id = $1")
+        .bind(prefix_id)
+        .fetch_optional(pool.get_ref())
+        .await
+        .map_err(|e| AppError::Database(format!("Failed to get prefix: {}", e)))?
+        .ok_or_else(|| AppError::NotFound(format!("Prefix {} not found", prefix_id)))?;
+
     let result = sqlx::query("DELETE FROM prefixes WHERE id = $1")
         .bind(prefix_id)
         .execute(pool.get_ref())
@@ -574,6 +659,22 @@ pub async fn delete_prefix(
     }
 
     info!(id = prefix_id, admin = %admin.username, "Prefix deleted successfully");
+
+    // Audit log
+    let audit_details = serde_json::json!({
+        "prefix": prefix,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(admin.username.clone())
+        .action("delete_prefix")
+        .entity_type("prefix")
+        .entity_id(prefix_id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
 
     // Sync to rate_cards
     let sync_result = sync_rate_cards(&pool).await;
@@ -724,6 +825,25 @@ pub async fn create_tariff(
 
     info!(id = id, zone_id = req.zone_id, "Tariff created successfully");
 
+    // Audit log
+    let audit_details = serde_json::json!({
+        "zone_id": req.zone_id,
+        "rate_name": req.rate_name,
+        "rate_per_minute": req.rate_per_minute,
+        "billing_increment": req.billing_increment,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("create_tariff")
+        .entity_type("tariff")
+        .entity_id(id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     // Sync to rate_cards
     let sync_result = sync_rate_cards(&pool).await;
     if let Err(e) = sync_result {
@@ -868,6 +988,24 @@ pub async fn update_tariff(
 
     info!(id = tariff_id, "Tariff updated successfully");
 
+    // Audit log
+    let audit_details = serde_json::json!({
+        "rate_name": req.rate_name,
+        "rate_per_minute": req.rate_per_minute,
+        "enabled": req.enabled,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("update_tariff")
+        .entity_type("tariff")
+        .entity_id(tariff_id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     // Sync to rate_cards
     let sync_result = sync_rate_cards(&pool).await;
     if let Err(e) = sync_result {
@@ -915,6 +1053,14 @@ pub async fn delete_tariff(
     let tariff_id = path.into_inner();
     debug!(id = tariff_id, admin = %admin.username, "Deleting tariff");
 
+    // Get tariff info before deleting
+    let rate_name: String = sqlx::query_scalar("SELECT rate_name FROM rate_zones WHERE id = $1")
+        .bind(tariff_id)
+        .fetch_optional(pool.get_ref())
+        .await
+        .map_err(|e| AppError::Database(format!("Failed to get tariff: {}", e)))?
+        .ok_or_else(|| AppError::NotFound(format!("Tariff {} not found", tariff_id)))?;
+
     let result = sqlx::query("DELETE FROM rate_zones WHERE id = $1")
         .bind(tariff_id)
         .execute(pool.get_ref())
@@ -929,6 +1075,22 @@ pub async fn delete_tariff(
     }
 
     info!(id = tariff_id, admin = %admin.username, "Tariff deleted successfully");
+
+    // Audit log
+    let audit_details = serde_json::json!({
+        "rate_name": rate_name,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(admin.username.clone())
+        .action("delete_tariff")
+        .entity_type("tariff")
+        .entity_id(tariff_id.to_string())
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
 
     // Sync to rate_cards
     let sync_result = sync_rate_cards(&pool).await;
@@ -954,6 +1116,22 @@ pub async fn sync_rate_cards_endpoint(
     info!(admin = %admin.username, "Manual sync rate cards triggered");
 
     let result = sync_rate_cards(&pool).await?;
+
+    // Audit log
+    let audit_details = serde_json::json!({
+        "rate_cards_synced": result.rate_cards_synced,
+        "rate_cards_deleted": result.rate_cards_deleted,
+    });
+
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(admin.username.clone())
+        .action("sync_rate_cards")
+        .entity_type("rate_card")
+        .details(audit_details)
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }

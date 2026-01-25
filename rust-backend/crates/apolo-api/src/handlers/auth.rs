@@ -9,7 +9,7 @@ use crate::dto::auth::{
 use crate::dto::ApiResponse;
 use actix_web::{cookie::Cookie, web, HttpRequest, HttpResponse};
 use apolo_auth::{AuthenticatedUser, JwtService, PasswordService};
-use apolo_core::models::{User, UserInfo, UserRole};
+use apolo_core::models::{AuditLogBuilder, User, UserInfo, UserRole};
 use apolo_core::traits::{Repository, UserRepository};
 use apolo_core::AppError;
 use apolo_db::PgUserRepository;
@@ -77,6 +77,16 @@ pub async fn login(
 
     info!(username = %username, role = ?user.role, "Login successful");
 
+    // Audit log
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(user.username.clone())
+        .action("login")
+        .entity_type("auth")
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     // Create response
     let user_info = UserInfo::from(&user);
     let response = LoginResponse::new(token.clone(), expires_in, user_info);
@@ -97,9 +107,19 @@ pub async fn login(
 /// Logout endpoint
 ///
 /// POST /api/v1/auth/logout
-#[instrument(skip(_user))]
-pub async fn logout(_user: AuthenticatedUser) -> HttpResponse {
+#[instrument(skip(pool, _user))]
+pub async fn logout(pool: web::Data<PgPool>, _user: AuthenticatedUser) -> HttpResponse {
     info!(username = %_user.username, "User logged out");
+
+    // Audit log
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(_user.username.clone())
+        .action("logout")
+        .entity_type("auth")
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
 
     // Clear the token cookie
     let cookie = Cookie::build("token", "")

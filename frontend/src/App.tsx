@@ -9,8 +9,11 @@ import Balance from './pages/Balance'
 import Zones from './pages/Zones'
 import Rates from './pages/Rates'
 import Plans from './pages/Plans'
+import Users from './pages/Users'
+import AuditLogs from './pages/AuditLogs'
 import Login from './pages/Login'
 import { getCurrentUser } from './api/client'
+import type { UserRole } from './types'
 
 // Create a client
 const queryClient = new QueryClient({
@@ -23,8 +26,13 @@ const queryClient = new QueryClient({
   },
 })
 
-// Protected route wrapper
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+// Protected route wrapper with optional role check
+interface ProtectedRouteProps {
+  children: React.ReactNode
+  requiredRole?: UserRole
+}
+
+function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
   const { data: user, isLoading } = useQuery({
     queryKey: ['currentUser'],
     queryFn: getCurrentUser,
@@ -45,6 +53,24 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (!user) {
     return <Navigate to="/login" replace />
+  }
+
+  // Check role permission if required
+  if (requiredRole && user.role !== requiredRole) {
+    return (
+      <div className="min-h-screen bg-[#0a0f1a] flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-xl font-bold text-red-400 mb-2">Acceso Denegado</h2>
+          <p className="text-slate-500 mb-4">No tienes permisos para acceder a esta sección.</p>
+          <button
+            onClick={() => window.history.back()}
+            className="px-4 py-2 bg-cyan-500 text-white rounded hover:bg-cyan-600"
+          >
+            Volver
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return <>{children}</>
@@ -71,6 +97,23 @@ function AppRoutes() {
                 <Route path="/balance" element={<Balance />} />
                 <Route path="/zones" element={<Zones />} />
                 <Route path="/rates" element={<Rates />} />
+                {/* Superadmin only routes */}
+                <Route
+                  path="/users"
+                  element={
+                    <ProtectedRoute requiredRole="superadmin">
+                      <Users />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/audit-logs"
+                  element={
+                    <ProtectedRoute requiredRole="superadmin">
+                      <AuditLogs />
+                    </ProtectedRoute>
+                  }
+                />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Layout>
