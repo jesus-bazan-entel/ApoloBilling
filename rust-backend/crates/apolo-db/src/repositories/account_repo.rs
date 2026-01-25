@@ -47,7 +47,7 @@ impl Repository<Account, i32> for PgAccountRepository {
             SELECT
                 id, account_number, customer_phone,
                 account_type, balance, credit_limit, currency,
-                status, max_concurrent_calls,
+                status, max_concurrent_calls, plan_id,
                 created_at, updated_at
             FROM accounts
             WHERE id = $1
@@ -76,7 +76,7 @@ impl Repository<Account, i32> for PgAccountRepository {
             SELECT
                 id, account_number, customer_phone,
                 account_type, balance, credit_limit, currency,
-                status, max_concurrent_calls,
+                status, max_concurrent_calls, plan_id,
                 created_at, updated_at
             FROM accounts
             ORDER BY id
@@ -116,13 +116,13 @@ impl Repository<Account, i32> for PgAccountRepository {
             r#"
             INSERT INTO accounts (
                 account_number, customer_phone, account_type,
-                balance, credit_limit, currency, status, max_concurrent_calls
+                balance, credit_limit, currency, status, max_concurrent_calls, plan_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING
                 id, account_number, customer_phone,
                 account_type, balance, credit_limit, currency,
-                status, max_concurrent_calls,
+                status, max_concurrent_calls, plan_id,
                 created_at, updated_at
             "#,
         )
@@ -134,6 +134,7 @@ impl Repository<Account, i32> for PgAccountRepository {
         .bind(&entity.currency)
         .bind(entity.status.to_string())
         .bind(entity.max_concurrent_calls)
+        .bind(entity.plan_id)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| {
@@ -163,12 +164,13 @@ impl Repository<Account, i32> for PgAccountRepository {
                 currency = $7,
                 status = $8,
                 max_concurrent_calls = $9,
+                plan_id = $10,
                 updated_at = NOW()
             WHERE id = $1
             RETURNING
                 id, account_number, customer_phone,
                 account_type, balance, credit_limit, currency,
-                status, max_concurrent_calls,
+                status, max_concurrent_calls, plan_id,
                 created_at, updated_at
             "#,
         )
@@ -181,6 +183,7 @@ impl Repository<Account, i32> for PgAccountRepository {
         .bind(&entity.currency)
         .bind(entity.status.to_string())
         .bind(entity.max_concurrent_calls)
+        .bind(entity.plan_id)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| {
@@ -221,7 +224,7 @@ impl AccountRepository for PgAccountRepository {
             SELECT
                 id, account_number, customer_phone,
                 account_type, balance, credit_limit, currency,
-                status, max_concurrent_calls,
+                status, max_concurrent_calls, plan_id,
                 created_at, updated_at
             FROM accounts
             WHERE account_number = $1
@@ -249,7 +252,7 @@ impl AccountRepository for PgAccountRepository {
             SELECT
                 id, account_number, customer_phone,
                 account_type, balance, credit_limit, currency,
-                status, max_concurrent_calls,
+                status, max_concurrent_calls, plan_id,
                 created_at, updated_at
             FROM accounts
             WHERE customer_phone = $1
@@ -310,7 +313,7 @@ impl AccountRepository for PgAccountRepository {
             SELECT
                 id, account_number, customer_phone,
                 account_type, balance, credit_limit, currency,
-                status, max_concurrent_calls,
+                status, max_concurrent_calls, plan_id,
                 created_at, updated_at
             FROM accounts
             WHERE 1=1
@@ -365,6 +368,7 @@ struct AccountRow {
     currency: String,
     status: String,
     max_concurrent_calls: i32,
+    plan_id: Option<i32>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -382,6 +386,7 @@ impl From<AccountRow> for Account {
             currency: row.currency,
             status: PgAccountRepository::parse_account_status(&row.status),
             max_concurrent_calls: row.max_concurrent_calls,
+            plan_id: row.plan_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
         }

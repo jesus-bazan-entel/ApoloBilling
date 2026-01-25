@@ -14,8 +14,40 @@ export interface Account {
   status: AccountStatus
   max_concurrent_calls: number
   available_balance?: number
+  plan_id?: number              // Plan used to create this account
+  consumed_credit?: number      // Postpago: crédito consumido (backend)
+  utilization_percent?: number  // Postpago: % de utilización (backend)
   created_at: string
   updated_at: string
+}
+
+// Plan types
+export interface Plan {
+  id: number
+  plan_name: string
+  plan_code: string
+  account_type: AccountType
+  initial_balance: number
+  credit_limit: number
+  max_concurrent_calls: number
+  description?: string
+  enabled: boolean
+  created_at: string
+  updated_at: string
+  created_by: string
+}
+
+// Account display information (for UI transformation)
+export interface AccountDisplayInfo {
+  currentBalance?: number       // Prepaid: saldo actual
+  consumedCredit?: number       // Postpago: crédito consumido
+  creditLimit?: number          // Postpago: límite total
+  availableCredit?: number      // Postpago: disponible para gastar
+  utilizationPercent?: number   // Postpago: 0-100%
+  displayValue: string          // Texto formateado para mostrar
+  isPrepaid: boolean
+  isLowBalance: boolean         // Alerta de saldo bajo
+  balanceColor: 'success' | 'warning' | 'error'  // Color según nivel
 }
 
 // Zone types

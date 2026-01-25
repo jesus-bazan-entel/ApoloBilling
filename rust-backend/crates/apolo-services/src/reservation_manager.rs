@@ -98,7 +98,7 @@ impl<A: AccountRepository, R: ReservationRepository> ReservationManager<A, R> {
             r#"
             SELECT id, account_number, customer_phone, account_type,
                    balance, credit_limit, currency, status, max_concurrent_calls,
-                   created_at, updated_at
+                   plan_id, created_at, updated_at
             FROM accounts
             WHERE id = $1
             FOR UPDATE
@@ -468,7 +468,7 @@ impl<A: AccountRepository, R: ReservationRepository> ReservationManager<A, R> {
             r#"
             SELECT id, account_number, customer_phone, account_type,
                    balance, credit_limit, currency, status, max_concurrent_calls,
-                   created_at, updated_at
+                   plan_id, created_at, updated_at
             FROM accounts
             WHERE id = $1
             FOR UPDATE
@@ -551,6 +551,7 @@ struct AccountRow {
     currency: String,
     status: String,
     max_concurrent_calls: i32,
+    plan_id: Option<i32>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -570,6 +571,7 @@ impl From<AccountRow> for Account {
             currency: row.currency,
             status: AccountStatus::from_str(&row.status).unwrap_or(AccountStatus::Active),
             max_concurrent_calls: row.max_concurrent_calls,
+            plan_id: row.plan_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
         }

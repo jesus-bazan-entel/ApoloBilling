@@ -7,8 +7,8 @@ use actix_cors::Cors;
 use actix_web::{http::header, middleware, web, App, HttpResponse, HttpServer};
 use apolo_api::handlers::{
     cdr, configure_accounts, configure_active_calls, configure_auth, configure_dashboard,
-    configure_management, configure_rate_cards, configure_rates, configure_reservations, create_cdr,
-    ws_handler,
+    configure_management, configure_plans, configure_rate_cards, configure_rates, configure_reservations,
+    configure_stats, create_cdr, ws_handler,
 };
 use apolo_auth::{JwtService, PasswordService};
 use apolo_db::create_pool;
@@ -34,6 +34,8 @@ fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/health", web::get().to(health_check))
             // Dashboard stats
             .configure(configure_dashboard)
+            // Statistics endpoints
+            .configure(configure_stats)
             // Auth endpoints
             .configure(configure_auth)
             // Account endpoints
@@ -42,6 +44,8 @@ fn configure_routes(cfg: &mut web::ServiceConfig) {
             .configure(configure_rate_cards)
             // Legacy rates endpoints
             .configure(configure_rates)
+            // Plan endpoints
+            .configure(configure_plans)
             // Active calls endpoints
             .configure(configure_active_calls)
             // Reservations endpoints

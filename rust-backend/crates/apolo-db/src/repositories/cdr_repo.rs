@@ -281,13 +281,13 @@ impl CdrRepository for PgCdrRepository {
 
         if let Some(c) = caller {
             conditions.push(format!("caller_number LIKE ${}", param_idx));
-            params.push(format!("{}%", c));
+            params.push(format!("%{}%", c)); // Buscar en cualquier parte del número
             param_idx += 1;
         }
 
         if let Some(c) = callee {
             conditions.push(format!("called_number LIKE ${}", param_idx));
-            params.push(format!("{}%", c));
+            params.push(format!("%{}%", c)); // Buscar en cualquier parte del número
             param_idx += 1;
         }
 

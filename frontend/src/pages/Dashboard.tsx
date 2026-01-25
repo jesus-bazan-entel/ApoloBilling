@@ -1,5 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
-import { fetchStats, fetchActiveCalls, fetchActiveReservations } from '../api/client'
+import {
+  fetchStats,
+  fetchActiveCalls,
+  fetchActiveReservations,
+  fetchCallsByHour,
+  fetchRevenueByDay,
+  fetchBalanceTrend,
+  fetchCallsByType,
+  fetchCallsByZone,
+  fetchTrafficByDirection,
+} from '../api/client'
 import StatCard from '../components/StatCard'
 import DataTable from '../components/DataTable'
 import Badge from '../components/Badge'
@@ -9,7 +19,6 @@ import {
   DollarSign,
   TrendingUp,
   Clock,
-  CreditCard,
   Activity,
   BarChart3,
 } from 'lucide-react'
@@ -56,27 +65,88 @@ export default function Dashboard() {
   // Agregar id para compatibilidad con DataTable
   const activeCalls = activeCallsData.map(call => ({ ...call, id: call.uuid }))
 
-  // Datos de muestra para gráficos (en producción vendrían del backend)
-  const llamadasPorHora = Array.from({ length: 24 }, (_, i) => ({
-    hora: `${i}:00`,
-    llamadas: Math.floor(Math.random() * 50) + 10,
+  // Cargar datos reales de estadísticas
+  const { data: callsByHourData = [] } = useQuery({
+    queryKey: ['callsByHour'],
+    queryFn: fetchCallsByHour,
+    refetchInterval: 60000, // Actualizar cada minuto
+  })
+
+  const { data: revenueByDayData = [] } = useQuery({
+    queryKey: ['revenueByDay'],
+    queryFn: fetchRevenueByDay,
+    refetchInterval: 60000,
+  })
+
+  const { data: balanceTrendData = [] } = useQuery({
+    queryKey: ['balanceTrend'],
+    queryFn: fetchBalanceTrend,
+    refetchInterval: 60000,
+  })
+
+  const { data: callsByTypeData = [] } = useQuery({
+    queryKey: ['callsByType'],
+    queryFn: fetchCallsByType,
+    refetchInterval: 60000,
+  })
+
+  const { data: callsByZoneData = [] } = useQuery({
+    queryKey: ['callsByZone'],
+    queryFn: fetchCallsByZone,
+    refetchInterval: 60000,
+  })
+
+  const { data: trafficData } = useQuery({
+    queryKey: ['trafficByDirection'],
+    queryFn: fetchTrafficByDirection,
+    refetchInterval: 10000, // Actualizar cada 10 segundos (datos de hoy)
+  })
+
+  // Transformar datos del backend para las gráficas
+  const llamadasPorHora = callsByHourData.map((stat) => ({
+    hora: stat.hour_label,
+    llamadas: stat.call_count,
   }))
 
-  const ingresosPorDia = Array.from({ length: 7 }, (_, i) => ({
-    dia: ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][i],
-    ingresos: Math.floor(Math.random() * 1000) + 500,
+  const ingresosPorDia = revenueByDayData.map((stat) => ({
+    dia: stat.day_label,
+    ingresos: Number(stat.revenue),
   }))
 
   const distribucionTipoLlamada = [
-    { nombre: 'Salientes', valor: activeCalls.filter(c => c.direction === 'outbound').length || 15, color: '#3b82f6' },
-    { nombre: 'Entrantes', valor: activeCalls.filter(c => c.direction === 'inbound').length || 10, color: '#10b981' },
-    { nombre: 'Internas', valor: activeCalls.filter(c => c.direction === 'internal').length || 5, color: '#64748b' },
+    { nombre: 'Salientes', valor: activeCalls.filter(c => c.direction === 'outbound').length, color: '#3b82f6' },
+    { nombre: 'Entrantes', valor: activeCalls.filter(c => c.direction === 'inbound').length, color: '#10b981' },
+    { nombre: 'Internas', valor: activeCalls.filter(c => c.direction === 'internal').length, color: '#64748b' },
   ]
 
-  const tendenciaSaldos = Array.from({ length: 30 }, (_, i) => ({
-    dia: i + 1,
-    saldo: 10000 + Math.random() * 2000 - 1000,
+  const tendenciaSaldos = balanceTrendData.map((point) => ({
+    dia: point.day,
+    saldo: Number(point.total_balance),
   }))
+
+  // Datos para gráfico de llamadas por tipo (últimos 30 días)
+  const llamadasPorTipo = callsByTypeData.map((stat) => ({
+    nombre: stat.label,
+    valor: stat.call_count,
+    porcentaje: stat.percentage.toFixed(1),
+  }))
+
+  // Colores para el gráfico de tipo
+  const TIPO_COLORS = ['#3b82f6', '#10b981', '#64748b', '#f59e0b']
+
+  // Datos para gráfico de llamadas por zona (top 10)
+  const llamadasPorZona = callsByZoneData.map((stat) => ({
+    zona: stat.zone_name,
+    llamadas: stat.call_count,
+    porcentaje: stat.percentage.toFixed(1),
+  }))
+
+  // Colores para el gráfico de zonas
+  const ZONA_COLORS = [
+    '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
+    '#ec4899', '#14b8a6', '#f97316', '#6366f1',
+    '#84cc16', '#06b6d4'
+  ]
 
   const callColumns = [
     {
@@ -247,17 +317,18 @@ export default function Dashboard() {
             color="yellow"
           />
           <StatCard
-            title="Minutos Hoy"
-            value={(stats.minutes_today ?? 0).toFixed(1)}
-            subtitle={`${stats.cdrs_today ?? stats.calls_today ?? 0} llamadas`}
+            title="Tráfico Entrante (Hoy)"
+            value={`${Number(trafficData?.inbound?.total_minutes ?? 0).toFixed(1)} min`}
+            subtitle={`S/${Number(trafficData?.inbound?.total_revenue ?? 0).toFixed(2)} | ${trafficData?.inbound?.total_calls ?? 0} llamadas`}
             icon={Phone}
-            color="blue"
+            color="green"
           />
           <StatCard
-            title="Ingresos Hoy"
-            value={`S/${(stats.revenue_today ?? stats.revenue_this_month ?? 0).toFixed(2)}`}
-            icon={CreditCard}
-            color="green"
+            title="Tráfico Saliente (Hoy)"
+            value={`${Number(trafficData?.outbound?.total_minutes ?? 0).toFixed(1)} min`}
+            subtitle={`S/${Number(trafficData?.outbound?.total_revenue ?? 0).toFixed(2)} | ${trafficData?.outbound?.total_calls ?? 0} llamadas`}
+            icon={Phone}
+            color="blue"
           />
         </div>
       )}
@@ -330,35 +401,44 @@ export default function Dashboard() {
           </ResponsiveContainer>
         </div>
 
-        {/* Gráfico de Dona: Distribución por Tipo */}
+        {/* Gráfico de Dona: Distribución por Tipo de Llamadas Activas */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-slate-900">Distribución por Tipo</h3>
+            <h3 className="text-lg font-semibold text-slate-900">Llamadas Activas por Tipo</h3>
             <Activity className="w-5 h-5 text-slate-400" />
           </div>
-          <ResponsiveContainer width="100%" height={250}>
-            <PieChart>
-              <Pie
-                data={distribucionTipoLlamada}
-                cx="50%"
-                cy="50%"
-                innerRadius={60}
-                outerRadius={90}
-                paddingAngle={5}
-                dataKey="valor"
-              >
-                {distribucionTipoLlamada.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip />
-              <Legend
-                verticalAlign="bottom"
-                height={36}
-                formatter={(value, entry: any) => `${value} (${entry.payload.valor})`}
-              />
-            </PieChart>
-          </ResponsiveContainer>
+          {activeCalls.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart>
+                <Pie
+                  data={distribucionTipoLlamada}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={90}
+                  paddingAngle={5}
+                  dataKey="valor"
+                  nameKey="nombre"
+                  label
+                >
+                  {distribucionTipoLlamada.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend
+                  verticalAlign="bottom"
+                  height={36}
+                  formatter={(value) => value}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-[250px] text-slate-400">
+              <Activity className="w-12 h-12 mb-2" />
+              <p className="text-sm">No hay llamadas activas en este momento</p>
+            </div>
+          )}
         </div>
 
         {/* Gráfico de Área: Tendencia de Saldos */}
@@ -400,6 +480,99 @@ export default function Dashboard() {
               />
             </AreaChart>
           </ResponsiveContainer>
+        </div>
+
+        {/* Gráfico de Dona: Llamadas por Tipo (últimos 30 días) */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-slate-900">Llamadas por Tipo (30 días)</h3>
+            <BarChart3 className="w-5 h-5 text-slate-400" />
+          </div>
+          {llamadasPorTipo.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart>
+                <Pie
+                  data={llamadasPorTipo}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={90}
+                  paddingAngle={5}
+                  dataKey="valor"
+                  nameKey="nombre"
+                  label
+                >
+                  {llamadasPorTipo.map((_, index) => (
+                    <Cell key={`cell-type-${index}`} fill={TIPO_COLORS[index % TIPO_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(value, _, props) => [
+                    `${value} llamadas (${props.payload.porcentaje}%)`,
+                    props.payload.nombre
+                  ]}
+                />
+                <Legend
+                  verticalAlign="bottom"
+                  height={36}
+                  formatter={(value) => value}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-[250px] text-slate-400">
+              <BarChart3 className="w-12 h-12 mb-2" />
+              <p className="text-sm">No hay datos de llamadas por tipo</p>
+            </div>
+          )}
+        </div>
+
+        {/* Gráfico de Barras Horizontales: Llamadas por Zona (Top 10) */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-slate-900">Llamadas por Zona (Top 10)</h3>
+            <Activity className="w-5 h-5 text-slate-400" />
+          </div>
+          {llamadasPorZona.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={llamadasPorZona} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis type="number" tick={{ fontSize: 12 }} stroke="#64748b" />
+                <YAxis
+                  dataKey="zona"
+                  type="category"
+                  width={120}
+                  tick={{ fontSize: 11 }}
+                  stroke="#64748b"
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#fff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                  }}
+                  formatter={(value, _, props) => [
+                    `${value} llamadas (${props.payload.porcentaje}%)`,
+                    'Llamadas'
+                  ]}
+                />
+                <Bar
+                  dataKey="llamadas"
+                  fill="#3b82f6"
+                  radius={[0, 8, 8, 0]}
+                >
+                  {llamadasPorZona.map((_, index) => (
+                    <Cell key={`cell-zone-${index}`} fill={ZONA_COLORS[index % ZONA_COLORS.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-[250px] text-slate-400">
+              <Activity className="w-12 h-12 mb-2" />
+              <p className="text-sm">No hay datos de llamadas por zona</p>
+            </div>
+          )}
         </div>
       </div>
 

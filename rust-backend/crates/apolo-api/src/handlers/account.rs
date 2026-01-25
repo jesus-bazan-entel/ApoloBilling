@@ -12,7 +12,7 @@ use apolo_auth::AuthenticatedUser;
 use apolo_core::models::{AccountStatus, AccountType};
 use apolo_core::traits::{AccountRepository, Repository};
 use apolo_core::AppError;
-use apolo_db::PgAccountRepository;
+use apolo_db::{PgAccountRepository, PgPlanRepository};
 use chrono::Utc;
 use sqlx::PgPool;
 use tracing::{debug, info, instrument, warn};
@@ -83,6 +83,81 @@ pub async fn create_account(
             "Account {} already exists",
             req.account_number
         )));
+    }
+
+    // If plan_id is present, validate consistency with plan
+    if let Some(plan_id) = req.plan_id {
+        debug!(plan_id, "Validating account against plan");
+
+        let plan_repo = PgPlanRepository::new(pool.get_ref().clone());
+        let plan = plan_repo
+            .find_by_id(plan_id)
+            .await?
+            .ok_or_else(|| {
+                warn!(plan_id, "Plan not found");
+                AppError::NotFound(format!("Plan {} not found", plan_id))
+            })?;
+
+        // Validate account_type matches plan
+        let req_type = AccountType::from_str(&req.account_type)
+            .ok_or_else(|| AppError::Validation("Invalid account type".to_string()))?;
+
+        if req_type != plan.account_type {
+            warn!(
+                req_type = %req_type,
+                plan_type = %plan.account_type,
+                "Account type mismatch with plan"
+            );
+            return Err(AppError::Validation(format!(
+                "Account type '{}' does not match plan type '{}'",
+                req_type, plan.account_type
+            )));
+        }
+
+        // Validate values match plan based on account type
+        match req_type {
+            AccountType::Prepaid => {
+                if req.initial_balance != plan.initial_balance {
+                    warn!(
+                        req_balance = %req.initial_balance,
+                        plan_balance = %plan.initial_balance,
+                        "Initial balance mismatch with plan"
+                    );
+                    return Err(AppError::Validation(format!(
+                        "Initial balance must be {} (from plan {})",
+                        plan.initial_balance, plan.plan_code
+                    )));
+                }
+            }
+            AccountType::Postpaid => {
+                if req.credit_limit != plan.credit_limit {
+                    warn!(
+                        req_limit = %req.credit_limit,
+                        plan_limit = %plan.credit_limit,
+                        "Credit limit mismatch with plan"
+                    );
+                    return Err(AppError::Validation(format!(
+                        "Credit limit must be {} (from plan {})",
+                        plan.credit_limit, plan.plan_code
+                    )));
+                }
+            }
+        }
+
+        // Validate max_concurrent_calls matches plan
+        if req.max_concurrent_calls != plan.max_concurrent_calls {
+            warn!(
+                req_calls = req.max_concurrent_calls,
+                plan_calls = plan.max_concurrent_calls,
+                "Max concurrent calls mismatch with plan"
+            );
+            return Err(AppError::Validation(format!(
+                "Max concurrent calls must be {} (from plan {})",
+                plan.max_concurrent_calls, plan.plan_code
+            )));
+        }
+
+        debug!(plan_id, "Account validated successfully against plan");
     }
 
     // Create account

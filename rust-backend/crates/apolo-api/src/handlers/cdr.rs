@@ -60,8 +60,8 @@ pub async fn list_cdrs(
     );
 
     // Parse date filters
-    let start_date = parse_optional_date(&query.start_date);
-    let end_date = parse_optional_date(&query.end_date);
+    let start_date = parse_start_date(&query.start_date);
+    let end_date = parse_end_date(&query.end_date);
 
     // Query with filters
     let (cdrs, total) = repo
@@ -635,7 +635,10 @@ fn get_period_key(dt: &DateTime<Utc>, group_by: StatsGroupBy) -> (String, DateTi
 }
 
 /// Parse optional date string to DateTime<Utc>
-fn parse_optional_date(date_str: &Option<String>) -> Option<DateTime<Utc>> {
+/// Parse start date (beginning of day in Lima timezone)
+fn parse_start_date(date_str: &Option<String>) -> Option<DateTime<Utc>> {
+    use chrono_tz::America::Lima;
+
     let s = date_str.as_ref()?;
     if s.is_empty() {
         return None;
@@ -646,10 +649,38 @@ fn parse_optional_date(date_str: &Option<String>) -> Option<DateTime<Utc>> {
         return Some(dt.with_timezone(&Utc));
     }
 
-    // Try parsing as simple date (assume start of day UTC)
+    // Try parsing as simple date (start of day in Lima timezone)
     if let Ok(naive) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         if let Some(naive_dt) = naive.and_hms_opt(0, 0, 0) {
-            return Some(DateTime::from_naive_utc_and_offset(naive_dt, Utc));
+            // Parse date as Lima timezone, then convert to UTC for PostgreSQL
+            let lima_dt = Lima.from_local_datetime(&naive_dt).unwrap();
+            return Some(lima_dt.with_timezone(&Utc));
+        }
+    }
+
+    None
+}
+
+/// Parse end date (end of day in Lima timezone - 23:59:59)
+fn parse_end_date(date_str: &Option<String>) -> Option<DateTime<Utc>> {
+    use chrono_tz::America::Lima;
+
+    let s = date_str.as_ref()?;
+    if s.is_empty() {
+        return None;
+    }
+
+    // Try parsing as ISO 8601 (RFC 3339)
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+
+    // Try parsing as simple date (END of day in Lima timezone - 23:59:59)
+    if let Ok(naive) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        if let Some(naive_dt) = naive.and_hms_opt(23, 59, 59) {
+            // Parse date as Lima timezone, then convert to UTC for PostgreSQL
+            let lima_dt = Lima.from_local_datetime(&naive_dt).unwrap();
+            return Some(lima_dt.with_timezone(&Utc));
         }
     }
 

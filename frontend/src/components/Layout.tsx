@@ -22,6 +22,7 @@ const navigation = [
   { name: 'Llamadas Activas', href: '/calls', icon: Phone },
   { name: 'Registros CDR', href: '/cdr', icon: FileText },
   { name: 'Cuentas', href: '/accounts', icon: Users },
+  { name: 'Planes', href: '/plans', icon: FileText },
   { name: 'Saldos', href: '/balance', icon: DollarSign },
   { name: 'Zonas', href: '/zones', icon: Globe },
   { name: 'Tarifas', href: '/rates', icon: Settings },

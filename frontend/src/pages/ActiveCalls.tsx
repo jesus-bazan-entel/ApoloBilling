@@ -8,7 +8,7 @@ import { Phone, PhoneOff, Wifi, WifiOff } from 'lucide-react'
 import type { ActiveCall } from '../types'
 
 export default function ActiveCalls() {
-  const { isConnected, activeCalls: wsCalls } = useWebSocket()
+  const { isConnected } = useWebSocket()
   const [, setTick] = useState(0)
 
   // Update every second to refresh durations
@@ -220,6 +220,7 @@ export default function ActiveCalls() {
             {calls
               .reduce((sum, c) => {
                 const startTime = new Date(c.start_time).getTime()
+                // eslint-disable-next-line react-hooks/purity
                 const durationSec = Math.max(0, Math.floor((Date.now() - startTime) / 1000))
                 const rate = c.rate_per_minute || 0
                 return sum + (durationSec / 60) * rate

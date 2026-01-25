@@ -22,8 +22,8 @@ pub enum AccountType {
 impl fmt::Display for AccountType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AccountType::Prepaid => write!(f, "prepaid"),
-            AccountType::Postpaid => write!(f, "postpaid"),
+            AccountType::Prepaid => write!(f, "PREPAID"),
+            AccountType::Postpaid => write!(f, "POSTPAID"),
         }
     }
 }
@@ -115,6 +115,9 @@ pub struct Account {
     /// Maximum concurrent calls allowed
     pub max_concurrent_calls: i32,
 
+    /// Associated plan (if account was created from a plan)
+    pub plan_id: Option<i32>,
+
     /// Creation timestamp
     pub created_at: DateTime<Utc>,
 
@@ -179,6 +182,7 @@ impl Default for Account {
             currency: "USD".to_string(),
             status: AccountStatus::Active,
             max_concurrent_calls: 1,
+            plan_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

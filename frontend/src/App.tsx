@@ -8,6 +8,7 @@ import Accounts from './pages/Accounts'
 import Balance from './pages/Balance'
 import Zones from './pages/Zones'
 import Rates from './pages/Rates'
+import Plans from './pages/Plans'
 import Login from './pages/Login'
 import { getCurrentUser } from './api/client'
 
@@ -66,6 +67,7 @@ function AppRoutes() {
                 <Route path="/calls" element={<ActiveCalls />} />
                 <Route path="/cdr" element={<CDR />} />
                 <Route path="/accounts" element={<Accounts />} />
+                <Route path="/plans" element={<Plans />} />
                 <Route path="/balance" element={<Balance />} />
                 <Route path="/zones" element={<Zones />} />
                 <Route path="/rates" element={<Rates />} />

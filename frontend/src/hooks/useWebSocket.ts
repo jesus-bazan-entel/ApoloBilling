@@ -23,6 +23,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<number | null>(null)
+  const connectRef = useRef<(() => void) | null>(null)
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
@@ -43,37 +44,42 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
           const message: WSMessage = JSON.parse(event.data)
 
           switch (message.type) {
-            case 'active_calls':
+            case 'active_calls': {
               // Full list of active calls from server
               const allCalls = message.data as ActiveCall[]
               setActiveCalls(allCalls)
               break
+            }
 
-            case 'call_start':
+            case 'call_start': {
               const newCall = message.data as ActiveCall
               setActiveCalls((prev) => [...prev, newCall])
               onCallStart?.(newCall)
               break
+            }
 
-            case 'call_update':
+            case 'call_update': {
               const updatedCall = message.data as ActiveCall
               setActiveCalls((prev) =>
                 prev.map((c) => (c.call_uuid === updatedCall.call_uuid ? updatedCall : c))
               )
               onCallUpdate?.(updatedCall)
               break
+            }
 
-            case 'call_end':
+            case 'call_end': {
               const endedCall = message.data as ActiveCall
               setActiveCalls((prev) => prev.filter((c) => c.call_uuid !== endedCall.call_uuid))
               onCallEnd?.(endedCall)
               break
+            }
 
-            case 'stats_update':
+            case 'stats_update': {
               const newStats = message.data as DashboardStats
               setStats(newStats)
               onStatsUpdate?.(newStats)
               break
+            }
 
             case 'pong':
               // Keepalive response, ignore
@@ -87,8 +93,10 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       wsRef.current.onclose = () => {
         console.log('WebSocket disconnected')
         setIsConnected(false)
-        // Attempt to reconnect
-        reconnectTimeoutRef.current = window.setTimeout(connect, reconnectInterval)
+        // Attempt to reconnect using ref to avoid circular dependency
+        reconnectTimeoutRef.current = window.setTimeout(() => {
+          connectRef.current?.()
+        }, reconnectInterval)
       }
 
       wsRef.current.onerror = (error) => {
@@ -96,9 +104,16 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       }
     } catch (err) {
       console.error('Failed to create WebSocket:', err)
-      reconnectTimeoutRef.current = window.setTimeout(connect, reconnectInterval)
+      reconnectTimeoutRef.current = window.setTimeout(() => {
+        connectRef.current?.()
+      }, reconnectInterval)
     }
   }, [onCallStart, onCallUpdate, onCallEnd, onStatsUpdate, reconnectInterval])
+
+  // Update connectRef when connect changes
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {

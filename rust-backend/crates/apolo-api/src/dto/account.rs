@@ -5,6 +5,7 @@
 use apolo_core::models::{Account, AccountStatus, AccountType};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
@@ -38,6 +39,9 @@ pub struct AccountCreateRequest {
     /// Initial balance (optional)
     #[serde(default)]
     pub initial_balance: Decimal,
+
+    /// Plan ID (optional - if set, account will be created with plan settings)
+    pub plan_id: Option<i32>,
 }
 
 fn default_account_type() -> String {
@@ -66,6 +70,7 @@ impl AccountCreateRequest {
             currency: self.currency.clone(),
             status: AccountStatus::Active,
             max_concurrent_calls: self.max_concurrent_calls,
+            plan_id: self.plan_id,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -132,6 +137,17 @@ pub struct AccountResponse {
     /// Available balance (balance + credit_limit for postpaid)
     pub available_balance: Decimal,
 
+    /// Plan ID (if account was created from a plan)
+    pub plan_id: Option<i32>,
+
+    /// Consumed credit (only for postpaid accounts with negative balance)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumed_credit: Option<Decimal>,
+
+    /// Credit utilization percentage (only for postpaid accounts)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utilization_percent: Option<f64>,
+
     /// Created timestamp
     pub created_at: DateTime<Utc>,
 
@@ -142,6 +158,29 @@ pub struct AccountResponse {
 impl From<Account> for AccountResponse {
     fn from(account: Account) -> Self {
         let available = account.available_balance();
+
+        // Calculate consumed_credit and utilization only for postpaid accounts
+        let (consumed, utilization) = if account.account_type == AccountType::Postpaid {
+            // Consumed = absolute value of negative balance
+            let consumed = if account.balance < Decimal::ZERO {
+                account.balance.abs()
+            } else {
+                Decimal::ZERO
+            };
+
+            // Utilization = (consumed / credit_limit) * 100
+            let util = if account.credit_limit > Decimal::ZERO {
+                let percent = (consumed / account.credit_limit) * Decimal::from(100);
+                Some(percent.to_f64().unwrap_or(0.0))
+            } else {
+                None
+            };
+
+            (Some(consumed), util)
+        } else {
+            (None, None)
+        };
+
         Self {
             id: account.id,
             account_number: account.account_number,
@@ -153,6 +192,9 @@ impl From<Account> for AccountResponse {
             status: account.status.to_string(),
             max_concurrent_calls: account.max_concurrent_calls,
             available_balance: available,
+            plan_id: account.plan_id,
+            consumed_credit: consumed,
+            utilization_percent: utilization,
             created_at: account.created_at,
             updated_at: account.updated_at,
         }
@@ -161,6 +203,28 @@ impl From<Account> for AccountResponse {
 
 impl From<&Account> for AccountResponse {
     fn from(account: &Account) -> Self {
+        let available = account.available_balance();
+
+        // Calculate consumed_credit and utilization only for postpaid accounts
+        let (consumed, utilization) = if account.account_type == AccountType::Postpaid {
+            let consumed = if account.balance < Decimal::ZERO {
+                account.balance.abs()
+            } else {
+                Decimal::ZERO
+            };
+
+            let util = if account.credit_limit > Decimal::ZERO {
+                let percent = (consumed / account.credit_limit) * Decimal::from(100);
+                Some(percent.to_f64().unwrap_or(0.0))
+            } else {
+                None
+            };
+
+            (Some(consumed), util)
+        } else {
+            (None, None)
+        };
+
         Self {
             id: account.id,
             account_number: account.account_number.clone(),
@@ -171,7 +235,10 @@ impl From<&Account> for AccountResponse {
             currency: account.currency.clone(),
             status: account.status.to_string(),
             max_concurrent_calls: account.max_concurrent_calls,
-            available_balance: account.available_balance(),
+            available_balance: available,
+            plan_id: account.plan_id,
+            consumed_credit: consumed,
+            utilization_percent: utilization,
             created_at: account.created_at,
             updated_at: account.updated_at,
         }
@@ -233,12 +300,14 @@ mod tests {
             currency: "USD".to_string(),
             max_concurrent_calls: 2,
             initial_balance: dec!(100.00),
+            plan_id: None,
         };
 
         let account = req.to_account();
         assert_eq!(account.account_number, "ACC001");
         assert_eq!(account.balance, dec!(100.00));
         assert_eq!(account.account_type, AccountType::Prepaid);
+        assert_eq!(account.plan_id, None);
     }
 
     #[test]
@@ -254,6 +323,7 @@ mod tests {
             currency: "USD".to_string(),
             status: AccountStatus::Active,
             max_concurrent_calls: 1,
+            plan_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -261,6 +331,9 @@ mod tests {
         let response = AccountResponse::from(&account);
         assert_eq!(response.id, 1);
         assert_eq!(response.available_balance, dec!(100.00));
+        assert_eq!(response.plan_id, None);
+        assert_eq!(response.consumed_credit, None); // Prepaid doesn't have consumed_credit
+        assert_eq!(response.utilization_percent, None);
     }
 
     #[test]

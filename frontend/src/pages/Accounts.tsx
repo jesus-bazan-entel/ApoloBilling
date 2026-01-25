@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { fetchAccounts, createAccount, updateAccount, deleteAccount } from '../api/client'
+import { fetchAccounts, createAccount, updateAccount, deleteAccount, fetchPlans } from '../api/client'
 import DataTable from '../components/DataTable'
 import Badge from '../components/Badge'
+import CreditUtilizationBar from '../components/CreditUtilizationBar'
 import { Users, Plus, Edit, X, DollarSign, Trash2, Power, AlertTriangle } from 'lucide-react'
-import type { Account, AccountType, AccountStatus } from '../types'
+import type { Account, AccountType, AccountStatus, Plan } from '../types'
+import { getAccountDisplayInfo } from '../lib/accountHelpers'
 
 export default function AccountsPage() {
   const [showModal, setShowModal] = useState(false)
@@ -17,6 +19,19 @@ export default function AccountsPage() {
     queryFn: fetchAccounts,
     refetchInterval: 10000,
   })
+
+  // Cargar planes para mostrar nombre del plan en la tabla
+  const { data: plans = [] } = useQuery({
+    queryKey: ['plans'],
+    queryFn: fetchPlans,
+  })
+
+  // Helper para obtener nombre del plan
+  const getPlanName = (planId?: number) => {
+    if (!planId) return '-'
+    const plan = plans.find(p => p.id === planId)
+    return plan?.plan_name || '-'
+  }
 
   const createMutation = useMutation({
     mutationFn: createAccount,
@@ -88,6 +103,18 @@ export default function AccountsPage() {
       },
     },
     {
+      key: 'plan',
+      header: 'Plan',
+      render: (acc: Account) => {
+        const planName = getPlanName(acc.plan_id)
+        return (
+          <span className={`text-sm ${planName === '-' ? 'text-slate-400 italic' : 'text-slate-700'}`}>
+            {planName}
+          </span>
+        )
+      },
+    },
+    {
       key: 'status',
       header: 'Estado',
       render: (acc: Account) => {
@@ -113,42 +140,41 @@ export default function AccountsPage() {
     },
     {
       key: 'balance',
-      header: 'Saldo',
+      header: 'Estado Financiero',
       render: (acc: Account) => {
-        const balance = Number(acc.balance) || 0
-        return (
-          <span
-            className={`font-mono font-bold ${
-              balance > 0 ? 'text-green-600' : 'text-red-600'
-            }`}
-          >
-            S/{balance.toFixed(2)}
-          </span>
-        )
+        const info = getAccountDisplayInfo(acc)
+
+        if (info.isPrepaid) {
+          return (
+            <div className="text-right">
+              <div className={`font-mono font-bold ${
+                info.balanceColor === 'success' ? 'text-green-600' :
+                info.balanceColor === 'warning' ? 'text-yellow-600' :
+                'text-red-600'
+              }`}>
+                S/{info.currentBalance?.toFixed(2)}
+              </div>
+              <div className="text-xs text-slate-500">Saldo Disponible</div>
+            </div>
+          )
+        } else {
+          return (
+            <div className="text-right space-y-1 min-w-[200px]">
+              <div className="text-sm font-medium text-slate-700">
+                Consumido: S/{info.consumedCredit?.toFixed(2)}
+              </div>
+              <CreditUtilizationBar
+                utilizationPercent={info.utilizationPercent || 0}
+                showLabel={false}
+              />
+              <div className="text-xs text-slate-500">
+                Disponible: S/{info.availableCredit?.toFixed(2)} de S/{info.creditLimit?.toFixed(2)}
+              </div>
+            </div>
+          )
+        }
       },
-      className: 'text-right',
-    },
-    {
-      key: 'credit_limit',
-      header: 'Límite de Crédito',
-      render: (acc: Account) => {
-        const isPrepaid = acc.account_type?.toLowerCase() === 'prepaid'
-        const creditLimit = Number(acc.credit_limit) || 0
-        return (
-          <span className="font-mono text-slate-700">
-            {!isPrepaid ? `S/${creditLimit.toFixed(2)}` : '-'}
-          </span>
-        )
-      },
-      className: 'text-right',
-    },
-    {
-      key: 'max_concurrent_calls',
-      header: 'Llamadas Concurrentes',
-      render: (acc: Account) => (
-        <span className="text-slate-700">{acc.max_concurrent_calls}</span>
-      ),
-      className: 'text-center',
+      className: 'text-right min-w-[200px]',
     },
     {
       key: 'created_at',
@@ -370,6 +396,7 @@ interface AccountModalProps {
 
 function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalProps) {
   const isEditing = !!account
+  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null)
   const [formData, setFormData] = useState({
     account_number: account?.account_number || '',
     account_type: account?.account_type?.toLowerCase() || 'prepaid',
@@ -377,7 +404,39 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
     credit_limit: Number(account?.credit_limit) || 0,
     status: account?.status?.toLowerCase() || 'active',
     max_concurrent_calls: account?.max_concurrent_calls || 5,
+    plan_id: account?.plan_id,
   })
+
+  // Cargar planes disponibles (solo para crear nuevas cuentas)
+  const { data: plans = [] } = useQuery({
+    queryKey: ['plans'],
+    queryFn: fetchPlans,
+    enabled: !isEditing, // Solo cargar cuando creamos una cuenta
+  })
+
+  // Handler para cambio de plan (auto-poblar campos)
+  const handlePlanChange = (planId: string) => {
+    if (!planId) {
+      setSelectedPlan(null)
+      return
+    }
+
+    const plan = plans.find(p => p.id === Number(planId))
+    if (!plan) return
+
+    setSelectedPlan(plan)
+
+    // Auto-poblar valores del plan
+    const isPrepaid = plan.account_type.toLowerCase() === 'prepaid'
+    setFormData({
+      ...formData,
+      plan_id: plan.id,
+      account_type: plan.account_type.toLowerCase(),
+      initial_balance: isPrepaid ? Number(plan.initial_balance) : 0,
+      credit_limit: !isPrepaid ? Number(plan.credit_limit) : 0,
+      max_concurrent_calls: plan.max_concurrent_calls,
+    })
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -389,14 +448,21 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
         max_concurrent_calls: formData.max_concurrent_calls,
       })
     } else {
-      // Crear con initial_balance
-      onSubmit({
+      // Crear con initial_balance y plan_id (si aplica)
+      const payload: Partial<Account> & { initial_balance?: number } = {
         account_number: formData.account_number,
-        account_type: formData.account_type,
+        account_type: formData.account_type as AccountType,
         initial_balance: formData.initial_balance,
         credit_limit: formData.credit_limit,
         max_concurrent_calls: formData.max_concurrent_calls,
-      } as Partial<Account>)
+      }
+
+      // Solo incluir plan_id si hay un plan seleccionado
+      if (formData.plan_id) {
+        payload.plan_id = formData.plan_id
+      }
+
+      onSubmit(payload as Partial<Account>)
     }
   }
 
@@ -416,6 +482,33 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {!isEditing && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+              <label className="block text-sm font-medium text-blue-900 mb-2">
+                Seleccionar Plan (Opcional)
+              </label>
+              <select
+                value={selectedPlan?.id || ''}
+                onChange={(e) => handlePlanChange(e.target.value)}
+                className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+              >
+                <option value="">Sin plan (configuración manual)</option>
+                {plans
+                  .filter(p => p.enabled)
+                  .map((plan) => (
+                    <option key={plan.id} value={plan.id}>
+                      {plan.plan_name} ({plan.account_type === 'PREPAID' ? 'Prepago' : 'Postpago'})
+                    </option>
+                  ))}
+              </select>
+              {selectedPlan && (
+                <p className="text-xs text-blue-700 mt-2">
+                  ℹ️ Los valores del plan se han aplicado automáticamente y están bloqueados
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -445,23 +538,27 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
                     account_type: e.target.value as AccountType,
                   })
                 }
-                disabled={!!account}
+                disabled={!!account || !!selectedPlan}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100"
               >
                 <option value="prepaid">Prepago</option>
                 <option value="postpaid">Postpago</option>
               </select>
+              {selectedPlan && (
+                <p className="text-xs text-slate-500 mt-1">🔒 Bloqueado por plan</p>
+              )}
             </div>
 
             {!isEditing ? (
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Saldo Inicial
+                  {formData.account_type === 'prepaid' ? 'Saldo Inicial *' : 'Saldo Inicial'}
                 </label>
                 <input
                   type="number"
                   step="0.01"
-                  min="0"
+                  min={formData.account_type === 'prepaid' ? '0.01' : '0'}
+                  required={formData.account_type === 'prepaid'}
                   value={formData.initial_balance}
                   onChange={(e) =>
                     setFormData({
@@ -469,8 +566,17 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
                       initial_balance: parseFloat(e.target.value) || 0,
                     })
                   }
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={!!selectedPlan}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100"
                 />
+                {selectedPlan && (
+                  <p className="text-xs text-slate-500 mt-1">🔒 Bloqueado por plan</p>
+                )}
+                {formData.account_type === 'prepaid' && !selectedPlan && (
+                  <p className="text-xs text-slate-500 mt-1">
+                    Prepago requiere saldo inicial {'>'} 0
+                  </p>
+                )}
               </div>
             ) : (
               <div>
@@ -488,11 +594,13 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Límite de Crédito
+                {formData.account_type === 'postpaid' ? 'Límite de Crédito *' : 'Límite de Crédito'}
               </label>
               <input
                 type="number"
                 step="0.01"
+                min={formData.account_type === 'postpaid' ? '0.01' : '0'}
+                required={formData.account_type === 'postpaid'}
                 value={formData.credit_limit}
                 onChange={(e) =>
                   setFormData({
@@ -500,9 +608,17 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
                     credit_limit: parseFloat(e.target.value) || 0,
                   })
                 }
-                disabled={formData.account_type?.toLowerCase() === 'prepaid'}
+                disabled={formData.account_type?.toLowerCase() === 'prepaid' || !!selectedPlan}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100"
               />
+              {selectedPlan && formData.account_type === 'postpaid' && (
+                <p className="text-xs text-slate-500 mt-1">🔒 Bloqueado por plan</p>
+              )}
+              {formData.account_type === 'postpaid' && !selectedPlan && (
+                <p className="text-xs text-slate-500 mt-1">
+                  Postpago requiere límite de crédito {'>'} 0
+                </p>
+              )}
             </div>
 
             <div>
@@ -527,12 +643,13 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Llamadas Concurrentes Máx.
+                Llamadas Concurrentes Máx. *
               </label>
               <input
                 type="number"
                 min="1"
                 max="100"
+                required
                 value={formData.max_concurrent_calls}
                 onChange={(e) =>
                   setFormData({
@@ -540,8 +657,12 @@ function AccountModal({ account, onClose, onSubmit, isLoading }: AccountModalPro
                     max_concurrent_calls: parseInt(e.target.value) || 5,
                   })
                 }
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                disabled={!!selectedPlan && !isEditing}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100"
               />
+              {selectedPlan && !isEditing && (
+                <p className="text-xs text-slate-500 mt-1">🔒 Bloqueado por plan</p>
+              )}
             </div>
           </div>
 

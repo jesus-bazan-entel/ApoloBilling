@@ -1,6 +1,7 @@
 import axios from 'axios'
 import type {
   Account,
+  Plan,
   Zone,
   RateCard,
   CDR,
@@ -18,6 +19,28 @@ const api = axios.create({
   },
   withCredentials: true, // For JWT cookie authentication
 })
+
+// Response interceptor to handle token expiration
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    // Check if error is 401 Unauthorized (token expired or invalid)
+    if (error.response?.status === 401) {
+      // Avoid infinite loop - don't redirect if already on login page
+      const currentPath = window.location.pathname
+      if (!currentPath.includes('/login') && !currentPath.includes('/auth/login')) {
+        console.warn('Session expired. Redirecting to login...')
+
+        // Clear any stored state if needed
+        localStorage.removeItem('user')
+
+        // Force redirect to login page
+        window.location.href = '/login'
+      }
+    }
+    return Promise.reject(error)
+  }
+)
 
 // Health check
 export const checkHealth = async (): Promise<{ status: string; version: string }> => {
@@ -65,6 +88,37 @@ export const topupAccount = async (
 ): Promise<{ previous_balance: number; amount: number; new_balance: number }> => {
   const { data } = await api.post(`/accounts/${id}/topup`, { amount, reason })
   return data.data || data
+}
+
+// ============== PLANS ==============
+
+export const fetchPlans = async (): Promise<Plan[]> => {
+  const { data } = await api.get('/plans')
+  return data.data || data
+}
+
+export const fetchActivePlans = async (): Promise<Plan[]> => {
+  const { data } = await api.get('/plans/active')
+  return data.data || data
+}
+
+export const fetchPlan = async (id: number): Promise<Plan> => {
+  const { data } = await api.get(`/plans/${id}`)
+  return data.data || data
+}
+
+export const createPlan = async (plan: Partial<Plan>): Promise<Plan> => {
+  const { data } = await api.post('/plans', plan)
+  return data.data || data
+}
+
+export const updatePlan = async (id: number, plan: Partial<Plan>): Promise<Plan> => {
+  const { data} = await api.put(`/plans/${id}`, plan)
+  return data.data || data
+}
+
+export const deletePlan = async (id: number): Promise<void> => {
+  await api.delete(`/plans/${id}`)
 }
 
 // ============== ZONES (Management) ==============
@@ -331,6 +385,101 @@ export const deleteTariff = async (id: number): Promise<void> => {
 // Sync rate cards from zones/prefixes/tariffs
 export const syncRateCards = async (): Promise<{ synced_count: number }> => {
   const { data } = await api.post('/sync-rate-cards')
+  return data.data || data
+}
+
+// ============== STATISTICS ==============
+
+export interface HourlyCallStats {
+  hour: number
+  hour_label: string
+  call_count: number
+  total_duration: number
+  total_revenue: number
+}
+
+export interface DailyRevenueStats {
+  date: string
+  day_of_week: number
+  day_label: string
+  call_count: number
+  revenue: number
+  total_minutes: number
+}
+
+export interface BalanceTrendPoint {
+  date: string
+  day: number
+  total_balance: number
+  active_accounts: number
+  average_balance: number
+}
+
+export const fetchCallsByHour = async (): Promise<HourlyCallStats[]> => {
+  const { data } = await api.get('/stats/calls-by-hour')
+  // Backend returns { data: { data: [...] } }
+  return data.data?.data || data.data || data
+}
+
+export const fetchRevenueByDay = async (): Promise<DailyRevenueStats[]> => {
+  const { data } = await api.get('/stats/revenue-by-day')
+  // Backend returns { data: { data: [...] } }
+  return data.data?.data || data.data || data
+}
+
+export const fetchBalanceTrend = async (): Promise<BalanceTrendPoint[]> => {
+  const { data } = await api.get('/stats/balance-trend')
+  // Backend returns { data: { data: [...] } }
+  return data.data?.data || data.data || data
+}
+
+export interface CallTypeStats {
+  call_type: string
+  label: string
+  call_count: number
+  total_duration: number
+  total_cost: number
+  percentage: number
+}
+
+export interface ZoneStats {
+  zone_id?: number
+  zone_name: string
+  call_count: number
+  total_duration: number
+  total_cost: number
+  percentage: number
+}
+
+export const fetchCallsByType = async (): Promise<CallTypeStats[]> => {
+  const { data } = await api.get('/stats/calls-by-type')
+  // Backend returns { data: { data: [...] } }
+  return data.data?.data || data.data || data
+}
+
+export const fetchCallsByZone = async (): Promise<ZoneStats[]> => {
+  const { data } = await api.get('/stats/calls-by-zone')
+  // Backend returns { data: { data: [...] } }
+  return data.data?.data || data.data || data
+}
+
+export interface TrafficStats {
+  direction: string
+  label: string
+  total_calls: number
+  total_minutes: number
+  total_revenue: number
+  avg_duration: number
+}
+
+export interface TrafficByDirection {
+  inbound: TrafficStats
+  outbound: TrafficStats
+}
+
+export const fetchTrafficByDirection = async (): Promise<TrafficByDirection> => {
+  const { data } = await api.get('/stats/traffic-by-direction')
+  // Backend returns { data: { inbound: {...}, outbound: {...} } }
   return data.data || data
 }
 
