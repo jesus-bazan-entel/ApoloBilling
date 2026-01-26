@@ -96,3 +96,17 @@ ssl/
 *.db
 *.sqlite
 *.sqlite3
+
+# Claves SSH y archivos sensibles
+.ssh/
+*.pem
+*.key
+id_rsa*
+id_ecdsa*
+id_ed25519*
+
+# Archivos temporales de correo
+dead.letter
+
+# Imágenes locales (diagramas, capturas, etc.)
+billing-fig*.png
