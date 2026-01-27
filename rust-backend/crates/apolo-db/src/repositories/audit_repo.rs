@@ -86,7 +86,8 @@ impl PgAuditLogRepository {
                 id, user_id, username, action, entity_type,
                 entity_id, details, ip_address, user_agent, created_at
             FROM audit_logs
-            WHERE 1=1
+            WHERE username != 'postgres'
+              AND action NOT IN ('ddl_operation', 'ddl_drop_operation')
             "#,
         );
 
@@ -194,7 +195,9 @@ impl PgAuditLogRepository {
             r#"
             SELECT COUNT(*)
             FROM audit_logs
-            WHERE ($1::TEXT IS NULL OR username = $1)
+            WHERE username != 'postgres'
+              AND action NOT IN ('ddl_operation', 'ddl_drop_operation')
+              AND ($1::TEXT IS NULL OR username = $1)
               AND ($2::TEXT IS NULL OR action = $2)
               AND ($3::TEXT IS NULL OR entity_type = $3)
               AND ($4::TEXT IS NULL OR entity_id = $4)

@@ -9,11 +9,12 @@ use crate::dto::rate_card::{
 use crate::dto::{ApiResponse, PaginationParams};
 use actix_web::{web, HttpResponse};
 use apolo_auth::AuthenticatedUser;
-use apolo_core::models::RateCard;
+use apolo_core::models::{AuditLogBuilder, RateCard};
 use apolo_core::traits::{RateRepository, Repository};
 use apolo_core::AppError;
 use apolo_db::PgRateRepository;
 use chrono::Utc;
+use serde_json::json;
 use sqlx::PgPool;
 use tracing::{debug, info, instrument, warn};
 use validator::Validate;
@@ -70,10 +71,10 @@ pub async fn list_rate_cards(
 /// Create a new rate card
 ///
 /// POST /api/v1/rate-cards
-#[instrument(skip(pool, _user, req))]
+#[instrument(skip(pool, user, req))]
 pub async fn create_rate_card(
     pool: web::Data<PgPool>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     req: web::Json<RateCardCreateRequest>,
 ) -> Result<HttpResponse, AppError> {
     req.validate().map_err(|e| {
@@ -108,6 +109,23 @@ pub async fn create_rate_card(
         "Rate card created successfully"
     );
 
+    // Audit log
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(user.username.clone())
+        .action("create_rate_card")
+        .entity_type("rate_card")
+        .entity_id(created.id.to_string())
+        .details(json!({
+            "destination_prefix": created.destination_prefix,
+            "destination_name": created.destination_name,
+            "rate_per_minute": created.rate_per_minute,
+            "billing_increment": created.billing_increment
+        }))
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     let response = RateCardResponse::from(created);
     Ok(HttpResponse::Created().json(ApiResponse::with_message(
         response,
@@ -140,11 +158,11 @@ pub async fn get_rate_card(
 /// Update a rate card
 ///
 /// PUT /api/v1/rate-cards/{id}
-#[instrument(skip(pool, _user, req))]
+#[instrument(skip(pool, user, req))]
 pub async fn update_rate_card(
     pool: web::Data<PgPool>,
     path: web::Path<i32>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     req: web::Json<RateCardUpdateRequest>,
 ) -> Result<HttpResponse, AppError> {
     req.validate().map_err(|e| {
@@ -163,29 +181,38 @@ pub async fn update_rate_card(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Rate card {} not found", rate_id)))?;
 
+    // Build details for audit log
+    let mut changes = json!({});
+
     // Apply updates
     if let Some(name) = &req.destination_name {
+        changes["destination_name"] = json!({ "old": rate.destination_name, "new": name });
         rate.destination_name = name.clone();
         rate.rate_name = Some(name.clone());
     }
 
     if let Some(rate_pm) = req.rate_per_minute {
+        changes["rate_per_minute"] = json!({ "old": rate.rate_per_minute, "new": rate_pm });
         rate.rate_per_minute = rate_pm;
     }
 
     if let Some(increment) = req.billing_increment {
+        changes["billing_increment"] = json!({ "old": rate.billing_increment, "new": increment });
         rate.billing_increment = increment;
     }
 
     if let Some(fee) = req.connection_fee {
+        changes["connection_fee"] = json!({ "old": rate.connection_fee, "new": fee });
         rate.connection_fee = fee;
     }
 
     if let Some(priority) = req.priority {
+        changes["priority"] = json!({ "old": rate.priority, "new": priority });
         rate.priority = priority;
     }
 
     if let Some(end) = req.effective_end {
+        changes["effective_end"] = json!({ "old": rate.effective_end, "new": end });
         rate.effective_end = Some(end);
     }
 
@@ -200,6 +227,21 @@ pub async fn update_rate_card(
         "Rate card updated successfully"
     );
 
+    // Audit log
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(user.username.clone())
+        .action("update_rate_card")
+        .entity_type("rate_card")
+        .entity_id(updated.id.to_string())
+        .details(json!({
+            "destination_prefix": updated.destination_prefix,
+            "changes": changes
+        }))
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
+
     let response = RateCardResponse::from(updated);
     Ok(HttpResponse::Ok().json(ApiResponse::with_message(
         response,
@@ -210,11 +252,11 @@ pub async fn update_rate_card(
 /// Soft delete a rate card (sets effective_end to now)
 ///
 /// DELETE /api/v1/rate-cards/{id}
-#[instrument(skip(pool, _user))]
+#[instrument(skip(pool, user))]
 pub async fn delete_rate_card(
     pool: web::Data<PgPool>,
     path: web::Path<i32>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<HttpResponse, AppError> {
     let rate_id = path.into_inner();
     debug!(id = rate_id, "Soft deleting rate card");
@@ -227,6 +269,10 @@ pub async fn delete_rate_card(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Rate card {} not found", rate_id)))?;
 
+    // Store info for audit log before deletion
+    let prefix = rate.destination_prefix.clone();
+    let name = rate.destination_name.clone();
+
     // Soft delete by setting effective_end
     rate.effective_end = Some(Utc::now());
     rate.updated_at = Utc::now();
@@ -234,6 +280,22 @@ pub async fn delete_rate_card(
     repo.update(&rate).await?;
 
     info!(id = rate_id, "Rate card soft deleted successfully");
+
+    // Audit log
+    if let Ok(audit_data) = AuditLogBuilder::default()
+        .username(user.username.clone())
+        .action("delete_rate_card")
+        .entity_type("rate_card")
+        .entity_id(rate_id.to_string())
+        .details(json!({
+            "destination_prefix": prefix,
+            "destination_name": name,
+            "deleted_at": Utc::now()
+        }))
+        .build()
+    {
+        audit_data.insert(pool.get_ref()).await;
+    }
 
     Ok(HttpResponse::NoContent().finish())
 }

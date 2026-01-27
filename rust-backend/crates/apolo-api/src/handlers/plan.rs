@@ -182,10 +182,55 @@ pub async fn update_plan(
     let repo = PgPlanRepository::new(pool.get_ref().clone());
 
     // Check if plan exists
-    let _existing = repo
+    let existing = repo
         .find_by_id(plan_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Plan {} not found", plan_id)))?;
+
+    // Build details for audit log
+    let mut changes = serde_json::json!({});
+
+    if let Some(name) = &req.plan_name {
+        changes["plan_name"] = serde_json::json!({
+            "old": existing.plan_name,
+            "new": name
+        });
+    }
+
+    if let Some(balance) = req.initial_balance {
+        changes["initial_balance"] = serde_json::json!({
+            "old": existing.initial_balance,
+            "new": balance
+        });
+    }
+
+    if let Some(limit) = req.credit_limit {
+        changes["credit_limit"] = serde_json::json!({
+            "old": existing.credit_limit,
+            "new": limit
+        });
+    }
+
+    if let Some(calls) = req.max_concurrent_calls {
+        changes["max_concurrent_calls"] = serde_json::json!({
+            "old": existing.max_concurrent_calls,
+            "new": calls
+        });
+    }
+
+    if let Some(desc) = &req.description {
+        changes["description"] = serde_json::json!({
+            "old": existing.description,
+            "new": desc
+        });
+    }
+
+    if let Some(enabled) = req.enabled {
+        changes["enabled"] = serde_json::json!({
+            "old": existing.enabled,
+            "new": enabled
+        });
+    }
 
     // Update plan
     let updated = repo
@@ -202,11 +247,10 @@ pub async fn update_plan(
 
     info!(id = plan_id, "Plan updated successfully");
 
-    // Audit log
+    // Audit log with changes
     let audit_details = serde_json::json!({
-        "plan_name": updated.plan_name,
         "plan_code": updated.plan_code,
-        "enabled": updated.enabled,
+        "changes": changes
     });
 
     if let Ok(audit_data) = AuditLogBuilder::default()

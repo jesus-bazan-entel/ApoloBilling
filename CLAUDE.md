@@ -2677,3 +2677,307 @@ sudo systemctl start apolo-backend apolo-billing-engine apolo-frontend
 # 6. Verificar
 curl http://localhost:8000/api/v1/health
 ```
+
+---
+
+# SISTEMA DE AUDITORÍA DDL (Database Operations)
+
+## Propósito
+
+El sistema de auditoría DDL captura automáticamente todas las operaciones de estructura de base de datos (DDL - Data Definition Language) para mantener un registro completo de cambios en el schema.
+
+## Componentes
+
+### 1. Tabla de Auditoría: `audit_logs`
+
+```sql
+CREATE TABLE audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES usuarios(id),
+    username VARCHAR(100) NOT NULL,
+    action VARCHAR(100) NOT NULL,
+    entity_type VARCHAR(50) NOT NULL,
+    entity_id VARCHAR(100),
+    details JSONB,
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+```
+
+### 2. Event Triggers de PostgreSQL
+
+Se implementaron dos event triggers que capturan automáticamente operaciones DDL:
+
+| Event Trigger | Evento | Captura |
+|---------------|--------|---------|
+| `audit_ddl_trigger` | `ddl_command_end` | CREATE TABLE, ALTER TABLE, CREATE INDEX, DROP INDEX |
+| `audit_drop_trigger` | `sql_drop` | DROP TABLE, DROP CONSTRAINT, DROP INDEX |
+
+### 3. Funciones de Auditoría
+
+```sql
+-- Función para capturar comandos DDL
+CREATE OR REPLACE FUNCTION audit_ddl_operations()
+RETURNS event_trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    obj record;
+    ddl_command text;
+BEGIN
+    FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands()
+    LOOP
+        INSERT INTO audit_logs (
+            username,
+            action,
+            entity_type,
+            entity_id,
+            details,
+            ip_address,
+            user_agent
+        ) VALUES (
+            current_user,
+            'ddl_operation',
+            'database',
+            obj.object_identity,
+            jsonb_build_object(
+                'command_tag', obj.command_tag,
+                'object_type', obj.object_type,
+                'object_identity', obj.object_identity,
+                'schema_name', obj.schema_name,
+                'executed_by', current_user,
+                'executed_at', NOW()
+            ),
+            inet_client_addr()::text,
+            'postgresql-event-trigger'
+        );
+    END LOOP;
+END;
+$$;
+
+-- Función para capturar operaciones DROP
+CREATE OR REPLACE FUNCTION audit_drop_operations()
+RETURNS event_trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    obj record;
+BEGIN
+    FOR obj IN SELECT * FROM pg_event_trigger_dropped_objects()
+    LOOP
+        INSERT INTO audit_logs (
+            username,
+            action,
+            entity_type,
+            entity_id,
+            details,
+            ip_address,
+            user_agent
+        ) VALUES (
+            current_user,
+            'ddl_drop_operation',
+            'database',
+            obj.object_identity,
+            jsonb_build_object(
+                'object_type', obj.object_type,
+                'schema_name', obj.schema_name,
+                'object_name', obj.object_name,
+                'object_identity', obj.object_identity,
+                'executed_by', current_user,
+                'executed_at', NOW()
+            ),
+            inet_client_addr()::text,
+            'postgresql-event-trigger'
+        );
+    END LOOP;
+END;
+$$;
+```
+
+## Tipos de Acciones Auditadas
+
+| Acción | Origen | Descripción |
+|--------|--------|-------------|
+| `login` | Backend Rust | Login de usuario |
+| `create_zone` | Backend Rust | Creación de zona |
+| `delete_zone` | Backend Rust | Eliminación de zona |
+| `create_prefix` | Backend Rust | Creación de prefijo |
+| `delete_prefix` | Backend Rust | Eliminación de prefijo |
+| `create_tariff` | Backend Rust | Creación de tarifa |
+| `delete_tariff` | Backend Rust | Eliminación de tarifa |
+| `ddl_operation` | Event Trigger | Operaciones DDL (CREATE, ALTER) |
+| `ddl_drop_operation` | Event Trigger | Operaciones DROP |
+| `alter_table_remove_constraint` | Manual | Eliminación de constraint (registro manual) |
+
+## Consultas Útiles
+
+### Ver todas las operaciones DDL en una tabla específica
+
+```sql
+SELECT
+    id,
+    username,
+    action,
+    entity_id,
+    jsonb_pretty(details) as detalles,
+    created_at
+FROM audit_logs
+WHERE entity_type = 'rate_cards'
+   OR entity_id LIKE '%rate_cards%'
+ORDER BY created_at DESC;
+```
+
+### Ver operaciones ALTER TABLE
+
+```sql
+SELECT
+    id,
+    username,
+    details->>'command_tag' as operacion,
+    details->>'object_identity' as tabla,
+    created_at
+FROM audit_logs
+WHERE action = 'ddl_operation'
+  AND details->>'command_tag' = 'ALTER TABLE'
+ORDER BY created_at DESC;
+```
+
+### Ver todas las operaciones DROP
+
+```sql
+SELECT
+    id,
+    username,
+    details->>'object_type' as tipo_objeto,
+    details->>'object_identity' as objeto,
+    created_at
+FROM audit_logs
+WHERE action = 'ddl_drop_operation'
+ORDER BY created_at DESC;
+```
+
+### Resumen de cambios DDL por usuario
+
+```sql
+SELECT
+    username,
+    COUNT(*) as total_operaciones,
+    MIN(created_at) as primera_operacion,
+    MAX(created_at) as ultima_operacion
+FROM audit_logs
+WHERE action IN ('ddl_operation', 'ddl_drop_operation', 'alter_table_remove_constraint')
+GROUP BY username
+ORDER BY total_operaciones DESC;
+```
+
+### Ver cambios en estructura en las últimas 24 horas
+
+```sql
+SELECT
+    id,
+    username,
+    action,
+    COALESCE(
+        details->>'command_tag',
+        details->>'object_type'
+    ) as tipo_cambio,
+    COALESCE(
+        details->>'object_identity',
+        entity_id
+    ) as objeto_afectado,
+    created_at
+FROM audit_logs
+WHERE action IN ('ddl_operation', 'ddl_drop_operation', 'alter_table_remove_constraint')
+  AND created_at > NOW() - INTERVAL '24 hours'
+ORDER BY created_at DESC;
+```
+
+## Registro Manual de Operaciones DDL
+
+Para operaciones DDL ejecutadas directamente con `psql` que requieren documentación específica:
+
+```sql
+INSERT INTO audit_logs (
+    username,
+    action,
+    entity_type,
+    entity_id,
+    details,
+    ip_address,
+    user_agent
+) VALUES (
+    'admin',
+    'alter_table_remove_constraint',
+    'rate_cards',
+    'structure',
+    jsonb_build_object(
+        'operation', 'ALTER TABLE',
+        'change', 'DROP CONSTRAINT rate_cards_destination_prefix_key',
+        'reason', 'Permitir múltiples tarifas para el mismo prefijo con diferentes fechas de vigencia',
+        'impact', 'Ahora se puede mantener historial de tarifas y programar cambios futuros',
+        'executed_by', 'psql',
+        'executed_at', NOW()
+    ),
+    '127.0.0.1',
+    'psql-direct-sql'
+);
+```
+
+## Verificar Event Triggers Activos
+
+```sql
+SELECT
+    evtname as "Event Trigger",
+    evtevent as "Evento",
+    evtenabled as "Estado",
+    evttags as "Tags"
+FROM pg_event_trigger
+ORDER BY evtname;
+```
+
+## Deshabilitar/Habilitar Event Triggers
+
+```sql
+-- Deshabilitar temporalmente
+ALTER EVENT TRIGGER audit_ddl_trigger DISABLE;
+ALTER EVENT TRIGGER audit_drop_trigger DISABLE;
+
+-- Habilitar
+ALTER EVENT TRIGGER audit_ddl_trigger ENABLE;
+ALTER EVENT TRIGGER audit_drop_trigger ENABLE;
+```
+
+## Eliminar Event Triggers (si es necesario)
+
+```sql
+DROP EVENT TRIGGER IF EXISTS audit_ddl_trigger;
+DROP EVENT TRIGGER IF EXISTS audit_drop_trigger;
+DROP FUNCTION IF EXISTS audit_ddl_operations();
+DROP FUNCTION IF EXISTS audit_drop_operations();
+```
+
+## Ejemplo de Uso
+
+```bash
+# Ejecutar operación DDL
+sudo -u postgres psql apolo_billing -c "ALTER TABLE rate_cards ADD COLUMN new_field TEXT;"
+
+# Verificar que se auditó
+sudo -u postgres psql apolo_billing -c "
+SELECT id, username, action, details->>'command_tag', details->>'object_identity', created_at
+FROM audit_logs
+WHERE action = 'ddl_operation'
+ORDER BY created_at DESC
+LIMIT 1;
+"
+```
+
+## Importante
+
+- Los event triggers solo capturan operaciones ejecutadas en la base de datos, no cambios de aplicación (esos se auditan desde el backend Rust)
+- Las operaciones DDL ejecutadas por superusuarios (postgres) también se auditan
+- El campo `details` contiene información completa en formato JSONB para análisis posterior
+- Los event triggers tienen un impacto mínimo en el rendimiento (~1-2ms por operación DDL)
+
+---

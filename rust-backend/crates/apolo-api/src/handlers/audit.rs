@@ -98,12 +98,14 @@ pub async fn get_audit_stats(
 
     debug!("Getting audit statistics");
 
-    // Get top actions, top users, and recent activity
+    // Get top actions, top users, and recent activity (excluding postgres and DDL operations)
     let top_actions: Vec<(String, i64)> = sqlx::query_as(
         r#"
         SELECT action, COUNT(*) as count
         FROM audit_logs
         WHERE created_at >= NOW() - INTERVAL '30 days'
+          AND username != 'postgres'
+          AND action NOT IN ('ddl_operation', 'ddl_drop_operation')
         GROUP BY action
         ORDER BY count DESC
         LIMIT 10
@@ -118,6 +120,8 @@ pub async fn get_audit_stats(
         SELECT username, COUNT(*) as count
         FROM audit_logs
         WHERE created_at >= NOW() - INTERVAL '30 days'
+          AND username != 'postgres'
+          AND action NOT IN ('ddl_operation', 'ddl_drop_operation')
         GROUP BY username
         ORDER BY count DESC
         LIMIT 10
@@ -127,13 +131,15 @@ pub async fn get_audit_stats(
     .await
     .map_err(|e| AppError::Database(format!("Failed to fetch top users: {}", e)))?;
 
-    let total_logs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs")
+    let total_logs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_logs WHERE username != 'postgres' AND action NOT IN ('ddl_operation', 'ddl_drop_operation')"
+    )
         .fetch_one(pool.get_ref())
         .await
         .map_err(|e| AppError::Database(format!("Failed to count logs: {}", e)))?;
 
     let logs_last_24h: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM audit_logs WHERE created_at >= NOW() - INTERVAL '24 hours'",
+        "SELECT COUNT(*) FROM audit_logs WHERE created_at >= NOW() - INTERVAL '24 hours' AND username != 'postgres' AND action NOT IN ('ddl_operation', 'ddl_drop_operation')",
     )
     .fetch_one(pool.get_ref())
     .await

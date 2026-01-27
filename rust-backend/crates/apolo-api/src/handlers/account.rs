@@ -245,13 +245,24 @@ pub async fn update_account(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Account {} not found", account_id)))?;
 
+    // Build details for audit log
+    let mut changes = serde_json::json!({});
+
     // Apply updates
     if let Some(phone) = &req.customer_phone {
+        changes["customer_phone"] = serde_json::json!({
+            "old": account.customer_phone,
+            "new": phone
+        });
         account.customer_phone = Some(phone.clone());
     }
 
     if let Some(status_str) = &req.status {
         if let Some(status) = AccountStatus::from_str(status_str) {
+            changes["status"] = serde_json::json!({
+                "old": format!("{:?}", account.status),
+                "new": format!("{:?}", status)
+            });
             account.status = status;
         } else {
             return Err(AppError::Validation(format!(
@@ -262,10 +273,18 @@ pub async fn update_account(
     }
 
     if let Some(credit_limit) = req.credit_limit {
+        changes["credit_limit"] = serde_json::json!({
+            "old": account.credit_limit,
+            "new": credit_limit
+        });
         account.credit_limit = credit_limit;
     }
 
     if let Some(max_calls) = req.max_concurrent_calls {
+        changes["max_concurrent_calls"] = serde_json::json!({
+            "old": account.max_concurrent_calls,
+            "new": max_calls
+        });
         account.max_concurrent_calls = max_calls;
     }
 
@@ -280,12 +299,10 @@ pub async fn update_account(
         "Account updated successfully"
     );
 
-    // Audit log
+    // Audit log with changes
     let audit_details = serde_json::json!({
         "account_number": updated.account_number,
-        "status": format!("{:?}", updated.status),
-        "credit_limit": updated.credit_limit,
-        "max_concurrent_calls": updated.max_concurrent_calls,
+        "changes": changes
     });
 
     if let Ok(audit_data) = AuditLogBuilder::default()
